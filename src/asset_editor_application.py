@@ -55,7 +55,11 @@ class AssetEditorApplication:
         self.selection_rectangle_tag = "selection_rectangle"
         self.selection_freeform_tag = "selection_freeform"
         self.zoom_slider_tag = "zoom_slider"
+        self.preview_pan_check_tag = "preview_pan_check"
         self.zoom_slider_enabled = False
+        self.preview_pan_enabled = False
+        self.preview_pan_active = False
+        self.preview_pan_last_mouse_position: tuple[float, float] | None = None
         self.area_exclude_enabled = False
         self.area_exclude_mode = TransparencyExcludeMode.DETAIL
         self.left_mouse_active = False
@@ -215,6 +219,12 @@ class AssetEditorApplication:
                 check_callback=self._on_zoom_slider_enabled_changed,
                 slider_callback=self._on_zoom_changed,
             )
+            self.help_widget.add_checkbox(
+                label="손 도구",
+                tag=self.preview_pan_check_tag,
+                tooltip="켜면 View에서 드래그로 확대된 이미지를 이동합니다.",
+                callback=self._on_preview_pan_enabled_changed,
+            )
 
             dpg.add_spacer(height=10)
             dpg.add_text("배경 투명 처리")
@@ -273,6 +283,7 @@ class AssetEditorApplication:
             autosize_x=True,
             autosize_y=True,
             border=True,
+            horizontal_scrollbar=True,
             tag=self.preview_area_tag,
         ):
             dpg.add_text("View")
@@ -350,6 +361,12 @@ class AssetEditorApplication:
     def _on_zoom_slider_enabled_changed(self, _sender, app_data) -> None:
         self.zoom_slider_enabled = bool(app_data)
         self._sync_zoom_slider_state()
+
+    def _on_preview_pan_enabled_changed(self, _sender, app_data) -> None:
+        self.preview_pan_enabled = bool(app_data)
+        if not self.preview_pan_enabled:
+            self._stop_preview_pan()
+        self._sync_preview_pan_state()
 
     def _on_zoom_changed(self, _sender, app_data) -> None:
         self.options.zoom = float(app_data)
@@ -442,6 +459,9 @@ class AssetEditorApplication:
     def _on_mouse_down(self, _sender, _app_data) -> None:
         if self.left_mouse_active:
             return
+        if self._start_preview_pan():
+            self.left_mouse_active = True
+            return
         if not self._is_preview_click_active():
             return
 
@@ -465,6 +485,9 @@ class AssetEditorApplication:
             self._select_area_at_point(image_point)
 
     def _on_mouse_drag(self, _sender, _app_data) -> None:
+        if self._update_preview_pan():
+            return
+
         if self._update_area_exclude_drag():
             return
 
@@ -482,6 +505,9 @@ class AssetEditorApplication:
 
     def _on_mouse_release(self, _sender, _app_data) -> None:
         try:
+            if self._finish_preview_pan():
+                return
+
             if self._finish_area_exclude_drag():
                 return
 
@@ -606,6 +632,75 @@ class AssetEditorApplication:
             return False
         return bool(dpg.is_item_hovered(self.preview_image_tag))
 
+    def _is_preview_pan_start_active(self) -> bool:
+        if not self.preview_pan_enabled:
+            return False
+        if self.document.preview_image is None:
+            return False
+        if not dpg.does_item_exist(self.preview_area_tag):
+            return False
+        return bool(dpg.is_item_hovered(self.preview_area_tag))
+
+    def _start_preview_pan(self) -> bool:
+        if not self._is_preview_pan_start_active():
+            return False
+
+        self.preview_pan_active = True
+        self.preview_pan_last_mouse_position = self._get_mouse_display_position()
+        return True
+
+    def _update_preview_pan(self) -> bool:
+        if not self.preview_pan_active:
+            return False
+
+        current_mouse_position = self._get_mouse_display_position()
+        previous_mouse_position = self.preview_pan_last_mouse_position
+        self.preview_pan_last_mouse_position = current_mouse_position
+        if previous_mouse_position is None:
+            return True
+
+        scroll_position = self._get_scroll_position(self.preview_area_tag)
+        if scroll_position is None:
+            return True
+
+        next_scroll_position = self._calculate_pan_scroll_position(
+            scroll_position,
+            previous_mouse_position,
+            current_mouse_position,
+        )
+        scroll_changed = self._set_scroll_position(
+            self.preview_area_tag,
+            next_scroll_position,
+        )
+        if scroll_changed:
+            self._update_selection_overlay()
+        return True
+
+    def _finish_preview_pan(self) -> bool:
+        if not self.preview_pan_active:
+            return False
+
+        self._stop_preview_pan()
+        return True
+
+    def _stop_preview_pan(self) -> None:
+        self.preview_pan_active = False
+        self.preview_pan_last_mouse_position = None
+
+    def _calculate_pan_scroll_position(
+        self,
+        scroll_position: tuple[float, float],
+        previous_mouse_position: tuple[float, float],
+        current_mouse_position: tuple[float, float],
+    ) -> tuple[float, float]:
+        scroll_x, scroll_y = scroll_position
+        previous_x, previous_y = previous_mouse_position
+        current_x, current_y = current_mouse_position
+        return (
+            scroll_x - (current_x - previous_x),
+            scroll_y - (current_y - previous_y),
+        )
+
     def _change_zoom_by_wheel_delta(self, wheel_delta: float) -> None:
         next_zoom = self.options.zoom + (wheel_delta * ZOOM_WHEEL_STEP)
         self.options.zoom = max(ZOOM_MIN, min(ZOOM_MAX, next_zoom))
@@ -649,6 +744,18 @@ class AssetEditorApplication:
             dpg.get_y_scroll(item_tag),
         )
 
+    def _get_scroll_max_position(
+        self,
+        item_tag: str,
+    ) -> tuple[float, float] | None:
+        if not dpg.does_item_exist(item_tag):
+            return None
+
+        return (
+            max(0.0, float(dpg.get_x_scroll_max(item_tag))),
+            max(0.0, float(dpg.get_y_scroll_max(item_tag))),
+        )
+
     def _restore_scroll_snapshot(
         self,
         snapshot: dict[str, tuple[float, float]],
@@ -674,13 +781,65 @@ class AssetEditorApplication:
         self,
         item_tag: str,
         scroll_position: tuple[float, float],
-    ) -> None:
+    ) -> bool:
         if not dpg.does_item_exist(item_tag):
-            return
+            return False
+
+        current_scroll_position = self._get_scroll_position(item_tag)
+        if current_scroll_position is None:
+            return False
+
+        scroll_max_position = self._get_scroll_max_position(item_tag)
+        if scroll_max_position is not None:
+            scroll_position = self._clamp_scroll_position(
+                scroll_position,
+                scroll_max_position,
+            )
+
+        x_changed, y_changed = self._get_scroll_axis_changes(
+            current_scroll_position,
+            scroll_position,
+        )
+        if not x_changed and not y_changed:
+            return False
 
         x_position, y_position = scroll_position
-        dpg.set_x_scroll(item_tag, x_position)
-        dpg.set_y_scroll(item_tag, y_position)
+        if x_changed:
+            dpg.set_x_scroll(item_tag, x_position)
+        if y_changed:
+            dpg.set_y_scroll(item_tag, y_position)
+        return True
+
+    def _clamp_scroll_position(
+        self,
+        scroll_position: tuple[float, float],
+        scroll_max_position: tuple[float, float],
+    ) -> tuple[float, float]:
+        scroll_x, scroll_y = scroll_position
+        max_x, max_y = scroll_max_position
+        return (
+            max(0.0, min(scroll_x, max_x)),
+            max(0.0, min(scroll_y, max_y)),
+        )
+
+    def _get_scroll_axis_changes(
+        self,
+        current_scroll_position: tuple[float, float],
+        next_scroll_position: tuple[float, float],
+    ) -> tuple[bool, bool]:
+        current_x, current_y = current_scroll_position
+        next_x, next_y = next_scroll_position
+        return (
+            not self._is_same_scroll_position(current_x, next_x),
+            not self._is_same_scroll_position(current_y, next_y),
+        )
+
+    def _is_same_scroll_position(
+        self,
+        current_position: float,
+        next_position: float,
+    ) -> bool:
+        return abs(current_position - next_position) < 0.01
 
     def _open_selected_history(self) -> None:
         selected_path = dpg.get_value(self.history_combo_tag)
@@ -708,6 +867,8 @@ class AssetEditorApplication:
         self.options.reset()
         self.document.reset_working_image()
         self.transparency_selection.clear()
+        self.preview_pan_enabled = False
+        self._stop_preview_pan()
         self.area_exclude_enabled = False
         self.area_exclude_mode = TransparencyExcludeMode.DETAIL
         self._clear_selection_overlay()
@@ -736,6 +897,7 @@ class AssetEditorApplication:
             self.edge_check_tag: self.options.edge_preview,
             self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
             self.zoom_slider_tag: self.options.zoom,
+            self.preview_pan_check_tag: self.preview_pan_enabled,
             self.transparency_mode_combo_tag: self.transparency_selection.mode,
             self.area_exclude_check_tag: self.area_exclude_enabled,
             self.area_exclude_mode_combo_tag: self.area_exclude_mode,
@@ -746,6 +908,7 @@ class AssetEditorApplication:
                 dpg.set_value(tag, value)
 
         self._sync_zoom_slider_state()
+        self._sync_preview_pan_state()
         self._sync_area_exclude_state()
 
     def _sync_zoom_slider_state(self) -> None:
@@ -755,6 +918,10 @@ class AssetEditorApplication:
                 enabled=self.zoom_slider_enabled,
             )
         self._sync_wheel_scroll_block()
+
+    def _sync_preview_pan_state(self) -> None:
+        if dpg.does_item_exist(self.preview_pan_check_tag):
+            dpg.set_value(self.preview_pan_check_tag, self.preview_pan_enabled)
 
     def _sync_area_exclude_state(self) -> None:
         area_mode = (
@@ -1011,8 +1178,12 @@ class AssetEditorApplication:
         self,
         clamp: bool = False,
     ) -> tuple[int, int] | None:
-        mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
+        mouse_x, mouse_y = self._get_mouse_display_position()
         return self._display_point_to_image_point(mouse_x, mouse_y, clamp)
+
+    def _get_mouse_display_position(self) -> tuple[float, float]:
+        mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
+        return float(mouse_x), float(mouse_y)
 
     def _display_point_to_image_point(
         self,

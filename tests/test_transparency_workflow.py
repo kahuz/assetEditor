@@ -241,6 +241,7 @@ class TransparencyWorkflowTest(unittest.TestCase):
             self.assertTrue(dpg.does_item_exist(app.transparency_mode_combo_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_check_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_mode_combo_tag))
+            self.assertTrue(dpg.does_item_exist(app.preview_pan_check_tag))
             self.assertTrue(
                 dpg.does_item_exist(app.transparency_selection_summary_tag),
             )
@@ -263,6 +264,92 @@ class TransparencyWorkflowTest(unittest.TestCase):
 
         self.assertEqual(app.transparency_selection.drag_start, (1, 1))
         self.assertEqual(app.transparency_selection.drag_end, (1, 1))
+
+    def test_preview_area_supports_horizontal_scrollbar(self) -> None:
+        app = AssetEditorApplication()
+        dpg.create_context()
+        try:
+            with dpg.window(tag="test_window"):
+                app._build_preview_area()
+
+            self.assertTrue(
+                dpg.get_item_configuration(
+                    app.preview_area_tag,
+                )["horizontal_scrollbar"],
+            )
+        finally:
+            dpg.destroy_context()
+
+    def test_preview_pan_drag_updates_view_scroll(self) -> None:
+        app = AssetEditorApplication()
+        mouse_positions = [(10.0, 10.0)]
+        recorded_scroll_positions = []
+
+        app._is_preview_pan_start_active = lambda: True
+        app._get_mouse_display_position = lambda: mouse_positions[-1]
+        app._get_scroll_position = lambda _tag: (100.0, 50.0)
+        app._set_scroll_position = (
+            lambda tag, position: recorded_scroll_positions.append(
+                (tag, position),
+            )
+        )
+        app._update_selection_overlay = lambda: None
+
+        self.assertTrue(app._start_preview_pan())
+        mouse_positions.append((30.0, 5.0))
+
+        self.assertTrue(app._update_preview_pan())
+        self.assertEqual(
+            recorded_scroll_positions,
+            [(app.preview_area_tag, (80.0, 55.0))],
+        )
+        self.assertTrue(app._finish_preview_pan())
+        self.assertFalse(app.preview_pan_active)
+
+    def test_preview_pan_scroll_clamp_keeps_other_axis_movable(self) -> None:
+        app = AssetEditorApplication()
+
+        scroll_position = app._calculate_pan_scroll_position(
+            (5.0, 50.0),
+            (10.0, 10.0),
+            (30.0, 5.0),
+        )
+        clamped_position = app._clamp_scroll_position(
+            scroll_position,
+            (100.0, 60.0),
+        )
+
+        self.assertEqual(scroll_position, (-15.0, 55.0))
+        self.assertEqual(clamped_position, (0.0, 55.0))
+
+    def test_preview_pan_skips_overlay_when_scroll_is_blocked(self) -> None:
+        app = AssetEditorApplication()
+        mouse_positions = [(10.0, 10.0)]
+        overlay_updates = []
+
+        app._is_preview_pan_start_active = lambda: True
+        app._get_mouse_display_position = lambda: mouse_positions[-1]
+        app._get_scroll_position = lambda _tag: (0.0, 55.0)
+        app._set_scroll_position = lambda _tag, _position: False
+        app._update_selection_overlay = lambda: overlay_updates.append(True)
+
+        self.assertTrue(app._start_preview_pan())
+        mouse_positions.append((30.0, 5.0))
+
+        self.assertTrue(app._update_preview_pan())
+        self.assertEqual(overlay_updates, [])
+
+    def test_scroll_axis_changes_ignore_same_position(self) -> None:
+        app = AssetEditorApplication()
+
+        self.assertEqual(
+            app._get_scroll_axis_changes((0.0, 55.0), (0.0, 55.0)),
+            (False, False),
+        )
+        self.assertEqual(
+            app._get_scroll_axis_changes((0.0, 55.0), (0.0, 58.0)),
+            (False, True),
+        )
 
     def test_area_exclude_method_control_tracks_exclude_enabled(self) -> None:
         app = AssetEditorApplication()
