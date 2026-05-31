@@ -264,6 +264,55 @@ class TransparencyWorkflowTest(unittest.TestCase):
         self.assertEqual(app.transparency_selection.drag_start, (1, 1))
         self.assertEqual(app.transparency_selection.drag_end, (1, 1))
 
+    def test_area_exclude_method_control_tracks_exclude_enabled(self) -> None:
+        app = AssetEditorApplication()
+        dpg.create_context()
+        try:
+            with dpg.window(tag="test_window"):
+                app._build_controls()
+
+            app.transparency_selection.set_mode(TransparencySelectionMode.COLOR)
+            app.area_exclude_enabled = True
+            app._sync_area_exclude_state()
+            self.assertFalse(app.area_exclude_enabled)
+            self.assertFalse(
+                dpg.get_item_configuration(
+                    app.area_exclude_check_tag,
+                )["enabled"],
+            )
+            self.assertFalse(
+                dpg.get_item_configuration(
+                    app.area_exclude_mode_combo_tag,
+                )["enabled"],
+            )
+
+            app.transparency_selection.set_mode(TransparencySelectionMode.AREA)
+            app.area_exclude_enabled = False
+            app._sync_area_exclude_state()
+            self.assertFalse(
+                dpg.get_item_configuration(
+                    app.area_exclude_mode_combo_tag,
+                )["enabled"],
+            )
+
+            app._on_area_exclude_mode_changed(None, True)
+            self.assertTrue(app.area_exclude_enabled)
+            self.assertTrue(
+                dpg.get_item_configuration(
+                    app.area_exclude_mode_combo_tag,
+                )["enabled"],
+            )
+
+            app._on_area_exclude_mode_changed(None, False)
+            self.assertFalse(app.area_exclude_enabled)
+            self.assertFalse(
+                dpg.get_item_configuration(
+                    app.area_exclude_mode_combo_tag,
+                )["enabled"],
+            )
+        finally:
+            dpg.destroy_context()
+
     def test_preview_processor_keeps_grayscale_and_edge_views(self) -> None:
         from preview.image_preview_processor import ImagePreviewProcessor
         from preview.preview_options import PreviewOptions

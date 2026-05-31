@@ -373,6 +373,7 @@ class AssetEditorApplication:
         self.area_exclude_enabled = bool(app_data)
         self.transparency_selection.clear_drag_state()
         self._clear_selection_overlay()
+        self._sync_area_exclude_state()
         self._update_selection_summary()
 
     def _on_area_exclude_method_changed(self, _sender, app_data) -> None:
@@ -615,31 +616,71 @@ class AssetEditorApplication:
         self._refresh_preview_texture()
 
     def _get_primary_scroll_position(self) -> tuple[float, float]:
-        return (
-            dpg.get_x_scroll(self.primary_window_tag),
-            dpg.get_y_scroll(self.primary_window_tag),
-        )
+        scroll_position = self._get_scroll_position(self.primary_window_tag)
+        if scroll_position is None:
+            return 0.0, 0.0
+        return scroll_position
 
     def _restore_primary_scroll_position(
         self,
         scroll_position: tuple[float, float],
     ) -> None:
-        self._set_primary_scroll_position(scroll_position)
+        self._restore_scroll_snapshot(
+            {self.primary_window_tag: scroll_position},
+        )
+
+    def _get_preview_scroll_snapshot(self) -> dict[str, tuple[float, float]]:
+        snapshot = {}
+        for tag in (self.primary_window_tag, self.preview_area_tag):
+            scroll_position = self._get_scroll_position(tag)
+            if scroll_position is not None:
+                snapshot[tag] = scroll_position
+        return snapshot
+
+    def _get_scroll_position(
+        self,
+        item_tag: str,
+    ) -> tuple[float, float] | None:
+        if not dpg.does_item_exist(item_tag):
+            return None
+
+        return (
+            dpg.get_x_scroll(item_tag),
+            dpg.get_y_scroll(item_tag),
+        )
+
+    def _restore_scroll_snapshot(
+        self,
+        snapshot: dict[str, tuple[float, float]],
+    ) -> None:
+        if not snapshot:
+            return
+
+        self._set_scroll_snapshot(snapshot)
         next_frame = dpg.get_frame_count() + 1
         dpg.set_frame_callback(
             next_frame,
-            callback=lambda: self._set_primary_scroll_position(
-                scroll_position,
-            ),
+            callback=lambda: self._set_scroll_snapshot(snapshot),
         )
 
-    def _set_primary_scroll_position(
+    def _set_scroll_snapshot(
         self,
+        snapshot: dict[str, tuple[float, float]],
+    ) -> None:
+        for item_tag, scroll_position in snapshot.items():
+            self._set_scroll_position(item_tag, scroll_position)
+
+    def _set_scroll_position(
+        self,
+        item_tag: str,
         scroll_position: tuple[float, float],
     ) -> None:
+        if not dpg.does_item_exist(item_tag):
+            return
+
         x_position, y_position = scroll_position
-        dpg.set_x_scroll(self.primary_window_tag, x_position)
-        dpg.set_y_scroll(self.primary_window_tag, y_position)
+        dpg.set_x_scroll(item_tag, x_position)
+        dpg.set_y_scroll(item_tag, y_position)
 
     def _open_selected_history(self) -> None:
         selected_path = dpg.get_value(self.history_combo_tag)
@@ -672,7 +713,7 @@ class AssetEditorApplication:
         self._clear_selection_overlay()
         self._sync_controls()
         self._update_selection_summary()
-        self._apply_preview()
+        self._apply_preview(preserve_scroll=False)
 
     def _refresh_history_items(self) -> None:
         if not dpg.does_item_exist(self.history_combo_tag):
@@ -716,25 +757,29 @@ class AssetEditorApplication:
         self._sync_wheel_scroll_block()
 
     def _sync_area_exclude_state(self) -> None:
-        if not dpg.does_item_exist(self.area_exclude_check_tag):
-            return
-
         area_mode = (
             self.transparency_selection.mode == TransparencySelectionMode.AREA
         )
+        if not area_mode:
+            self.area_exclude_enabled = False
+
+        if not dpg.does_item_exist(self.area_exclude_check_tag):
+            return
+
         dpg.configure_item(self.area_exclude_check_tag, enabled=area_mode)
         dpg.set_value(self.area_exclude_check_tag, self.area_exclude_enabled)
         if dpg.does_item_exist(self.area_exclude_mode_combo_tag):
+            exclude_method_enabled = area_mode and self.area_exclude_enabled
             dpg.configure_item(
                 self.area_exclude_mode_combo_tag,
-                enabled=area_mode,
+                enabled=exclude_method_enabled,
             )
             dpg.set_value(
                 self.area_exclude_mode_combo_tag,
                 self.area_exclude_mode,
             )
 
-    def _apply_preview(self) -> None:
+    def _apply_preview(self, preserve_scroll: bool = True) -> None:
         if self.document.working_image is None:
             return
 
@@ -748,12 +793,15 @@ class AssetEditorApplication:
                 self.transparency_selection.area_mask,
             )
         )
-        self._refresh_preview_texture()
+        self._refresh_preview_texture(preserve_scroll)
 
-    def _refresh_preview_texture(self) -> None:
+    def _refresh_preview_texture(self, preserve_scroll: bool = True) -> None:
         if self.document.preview_image is None:
             return
 
+        scroll_snapshot = {}
+        if preserve_scroll:
+            scroll_snapshot = self._get_preview_scroll_snapshot()
         preview = self.processor.resize_for_canvas(
             self.document.preview_image,
             self.options.zoom,
@@ -776,6 +824,7 @@ class AssetEditorApplication:
             parent=self.canvas_group_tag,
             tag=self.preview_image_tag,
         )
+        self._restore_scroll_snapshot(scroll_snapshot)
         self._update_selection_overlay()
         self._update_metadata()
 
