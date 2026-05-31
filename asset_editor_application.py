@@ -200,37 +200,43 @@ class AssetEditorApplication:
         with dpg.child_window(width=300, autosize_y=True, border=True):
             dpg.add_text("도구")
             dpg.add_separator()
-            dpg.add_button(
+            self._add_button_with_help(
                 label="이미지 열기",
-                width=-1,
+                tooltip="편집하거나 확인할 이미지 파일을 불러옵니다.",
                 callback=lambda: dpg.show_item("open_dialog"),
             )
-            dpg.add_button(
+            self._add_button_with_help(
                 label="다른 이름으로 저장",
-                width=-1,
+                tooltip="현재 프리뷰 결과를 새 이미지 파일로 저장합니다.",
                 callback=lambda: dpg.show_item("save_dialog"),
             )
-            dpg.add_button(
+            self._add_button_with_help(
                 label="초기화",
-                width=-1,
+                tooltip="프리뷰 옵션을 기본값으로 되돌립니다.",
                 callback=self._reset_preview,
             )
 
             dpg.add_spacer(height=10)
             dpg.add_text("프리뷰")
-            dpg.add_checkbox(
+            self._add_checkbox_with_help(
                 label="그레이스케일",
                 tag="grayscale_check",
+                tooltip="이미지를 흑백으로 변환해 색상 없이 명암만 확인합니다.",
                 callback=self._on_grayscale_changed,
             )
-            dpg.add_checkbox(
+            self._add_checkbox_with_help(
                 label="엣지 프리뷰",
                 tag="edge_check",
+                tooltip=(
+                    "OpenCV Canny 알고리즘으로 이미지의 윤곽선만 "
+                    "추출해 보여줍니다."
+                ),
                 callback=self._on_edge_preview_changed,
             )
-            dpg.add_slider_float(
+            self._add_slider_with_help(
                 label="확대",
                 tag="zoom_slider",
+                tooltip="프리뷰 표시 크기를 확대하거나 축소합니다.",
                 default_value=1.0,
                 min_value=0.25,
                 max_value=3.0,
@@ -240,6 +246,49 @@ class AssetEditorApplication:
             dpg.add_spacer(height=10)
             dpg.add_text("이미지 정보")
             dpg.add_text("로드된 이미지 없음", tag=self.metadata_tag, wrap=270)
+
+    def _add_button_with_help(self, label: str, tooltip: str, callback) -> None:
+        with dpg.group(horizontal=True):
+            dpg.add_button(label=label, width=250, callback=callback)
+            self._add_help_icon(tooltip)
+
+    def _add_checkbox_with_help(
+        self,
+        label: str,
+        tag: str,
+        tooltip: str,
+        callback,
+    ) -> None:
+        with dpg.group(horizontal=True):
+            dpg.add_checkbox(label=label, tag=tag, callback=callback)
+            self._add_help_icon(tooltip)
+
+    def _add_slider_with_help(
+        self,
+        label: str,
+        tag: str,
+        tooltip: str,
+        default_value: float,
+        min_value: float,
+        max_value: float,
+        callback,
+    ) -> None:
+        with dpg.group(horizontal=True):
+            dpg.add_text(label)
+            self._add_help_icon(tooltip)
+        dpg.add_slider_float(
+            tag=tag,
+            default_value=default_value,
+            min_value=min_value,
+            max_value=max_value,
+            callback=callback,
+            width=-1,
+        )
+
+    def _add_help_icon(self, tooltip: str) -> None:
+        help_item = dpg.add_text("?", color=(120, 170, 255, 255))
+        with dpg.tooltip(help_item):
+            dpg.add_text(tooltip, wrap=260)
 
     def _build_preview_area(self) -> None:
         with dpg.child_window(autosize_x=True, autosize_y=True, border=True):
