@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import dearpygui.dearpygui as dpg
 
-from common import APP_TITLE
+from common import APP_TITLE, ZOOM_MAX, ZOOM_MIN, ZOOM_WHEEL_STEP
 from document.image_document import ImageDocument
 from fonts.korean_font_manager import KoreanFontManager
 from history.image_history_cache import ImageHistoryCache
@@ -20,15 +20,18 @@ class AssetEditorApplication:
         self.font_manager = KoreanFontManager()
         self.history_cache = ImageHistoryCache()
         self.help_widget = HelpWidget()
+        self.primary_window_tag = "primary_window"
         self.texture_tag = "preview_texture"
         self.preview_image_tag = "preview_image"
         self.empty_preview_tag = "empty_preview_text"
         self.status_tag = "status_text"
         self.metadata_tag = "metadata_text"
         self.canvas_group_tag = "canvas_group"
+        self.preview_area_tag = "preview_area"
         self.history_combo_tag = "history_combo"
         self.zoom_slider_enabled = False
         self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
+        self.wheel_scroll_blocked = False
 
     def run(self) -> None:
         self._build_ui()
@@ -39,8 +42,12 @@ class AssetEditorApplication:
         dpg.create_context()
         self.font_manager.bind()
         self._build_file_dialogs()
+        self._build_global_handlers()
 
-        with dpg.window(tag="primary_window", label=APP_TITLE):
+        with dpg.window(
+            tag=self.primary_window_tag,
+            label=APP_TITLE,
+        ):
             self._build_menu()
             with dpg.group(horizontal=True):
                 self._build_controls()
@@ -51,7 +58,8 @@ class AssetEditorApplication:
         dpg.create_viewport(title=APP_TITLE, width=1280, height=820)
         dpg.setup_dearpygui()
         dpg.show_viewport()
-        dpg.set_primary_window("primary_window", True)
+        dpg.set_primary_window(self.primary_window_tag, True)
+        self._set_wheel_scroll_blocked(False)
 
     def _build_file_dialogs(self) -> None:
         with dpg.file_dialog(
@@ -168,11 +176,12 @@ class AssetEditorApplication:
                 slider_tag="zoom_slider",
                 tooltip=(
                     "체크하면 확대 배율을 조정할 수 있습니다. "
+                    "프리뷰 영역에서는 마우스 휠로도 조정할 수 있습니다. "
                     "체크를 해제해도 현재 확대 값은 유지됩니다."
                 ),
                 default_value=1.0,
-                min_value=0.25,
-                max_value=3.0,
+                min_value=ZOOM_MIN,
+                max_value=ZOOM_MAX,
                 check_callback=self._on_zoom_slider_enabled_changed,
                 slider_callback=self._on_zoom_changed,
             )
@@ -182,7 +191,12 @@ class AssetEditorApplication:
             dpg.add_text("로드된 이미지 없음", tag=self.metadata_tag, wrap=270)
 
     def _build_preview_area(self) -> None:
-        with dpg.child_window(autosize_x=True, autosize_y=True, border=True):
+        with dpg.child_window(
+            autosize_x=True,
+            autosize_y=True,
+            border=True,
+            tag=self.preview_area_tag,
+        ):
             dpg.add_text("프리뷰")
             dpg.add_separator()
             with dpg.group(tag=self.canvas_group_tag):
@@ -190,6 +204,11 @@ class AssetEditorApplication:
                     "이미지를 열면 프리뷰가 표시됩니다.",
                     tag=self.empty_preview_tag,
                 )
+
+    def _build_global_handlers(self) -> None:
+        with dpg.handler_registry():
+            dpg.add_mouse_move_handler(callback=self._on_mouse_move)
+            dpg.add_mouse_wheel_handler(callback=self._on_mouse_wheel)
 
     def _on_file_open(self, _sender, app_data) -> None:
         selections = app_data.get("selections", {})
@@ -230,10 +249,82 @@ class AssetEditorApplication:
     def _on_zoom_slider_enabled_changed(self, _sender, app_data) -> None:
         self.zoom_slider_enabled = bool(app_data)
         self._sync_zoom_slider_state()
+        self._sync_wheel_scroll_block()
 
     def _on_zoom_changed(self, _sender, app_data) -> None:
         self.options.zoom = float(app_data)
         self._refresh_preview_texture()
+
+    def _on_mouse_wheel(self, _sender, app_data) -> None:
+        self._sync_wheel_scroll_block()
+        if not self._is_preview_wheel_zoom_active():
+            return
+
+        scroll_position = self._get_primary_scroll_position()
+        self._change_zoom_by_wheel_delta(float(app_data))
+        self._restore_primary_scroll_position(scroll_position)
+
+    def _on_mouse_move(self, _sender, _app_data) -> None:
+        self._sync_wheel_scroll_block()
+
+    def _sync_wheel_scroll_block(self) -> None:
+        self._set_wheel_scroll_blocked(
+            self._is_preview_wheel_zoom_active(),
+        )
+
+    def _is_preview_wheel_zoom_active(self) -> bool:
+        if not self.zoom_slider_enabled:
+            return False
+        if self.document.preview_image is None:
+            return False
+        if not dpg.does_item_exist(self.preview_area_tag):
+            return False
+        return bool(dpg.is_item_hovered(self.preview_area_tag))
+
+    def _set_wheel_scroll_blocked(self, blocked: bool) -> None:
+        if self.wheel_scroll_blocked == blocked:
+            return
+
+        self.wheel_scroll_blocked = blocked
+        for tag in (self.primary_window_tag, self.preview_area_tag):
+            if dpg.does_item_exist(tag):
+                dpg.configure_item(tag, no_scroll_with_mouse=blocked)
+
+    def _change_zoom_by_wheel_delta(self, wheel_delta: float) -> None:
+        next_zoom = self.options.zoom + (wheel_delta * ZOOM_WHEEL_STEP)
+        self.options.zoom = max(ZOOM_MIN, min(ZOOM_MAX, next_zoom))
+
+        if dpg.does_item_exist("zoom_slider"):
+            dpg.set_value("zoom_slider", self.options.zoom)
+
+        self._refresh_preview_texture()
+
+    def _get_primary_scroll_position(self) -> tuple[float, float]:
+        return (
+            dpg.get_x_scroll(self.primary_window_tag),
+            dpg.get_y_scroll(self.primary_window_tag),
+        )
+
+    def _restore_primary_scroll_position(
+        self,
+        scroll_position: tuple[float, float],
+    ) -> None:
+        self._set_primary_scroll_position(scroll_position)
+        next_frame = dpg.get_frame_count() + 1
+        dpg.set_frame_callback(
+            next_frame,
+            callback=lambda: self._set_primary_scroll_position(
+                scroll_position,
+            ),
+        )
+
+    def _set_primary_scroll_position(
+        self,
+        scroll_position: tuple[float, float],
+    ) -> None:
+        x_position, y_position = scroll_position
+        dpg.set_x_scroll(self.primary_window_tag, x_position)
+        dpg.set_y_scroll(self.primary_window_tag, y_position)
 
     def _open_selected_history(self) -> None:
         selected_path = dpg.get_value(self.history_combo_tag)
@@ -297,6 +388,7 @@ class AssetEditorApplication:
                 "zoom_slider",
                 enabled=self.zoom_slider_enabled,
             )
+        self._sync_wheel_scroll_block()
 
     def _apply_preview(self) -> None:
         if self.document.original_image is None:
