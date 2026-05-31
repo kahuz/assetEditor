@@ -1,4 +1,5 @@
 # assetEditor
+![](./docs/fig/gui_preview.png)
 
 Dear PyGui + Pillow/OpenCV 기반의 간단한 이미지 View 도구입니다.
 `AGENTS.md`의 구현 규칙에 맞춰 클래스 기반으로 구성했습니다.
