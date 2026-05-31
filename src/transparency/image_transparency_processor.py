@@ -72,6 +72,34 @@ class ImageTransparencyProcessor:
         result_array[:, :, 3][normalized_mask] = 0
         return Image.fromarray(result_array)
 
+    def collect_circular_mask(
+        self,
+        image_size: tuple[int, int],
+        center_point: ImagePoint,
+        radius: int,
+    ) -> np.ndarray:
+        image_width, image_height = image_size
+        center_x = max(0, min(image_width - 1, center_point[0]))
+        center_y = max(0, min(image_height - 1, center_point[1]))
+        normalized_radius = max(1, int(radius))
+
+        y_indices, x_indices = np.ogrid[:image_height, :image_width]
+        distance_squared = (
+            (x_indices - center_x) ** 2
+            + (y_indices - center_y) ** 2
+        )
+        return distance_squared <= normalized_radius**2
+
+    def subtract_area_mask(
+        self,
+        base_mask: np.ndarray,
+        exclude_mask: np.ndarray,
+    ) -> np.ndarray:
+        if base_mask.shape != exclude_mask.shape:
+            raise ValueError("선택 영역과 제외 영역 크기가 다릅니다.")
+
+        return base_mask.astype(bool) & ~exclude_mask.astype(bool)
+
     def apply_selection_highlight(
         self,
         image: Image.Image,

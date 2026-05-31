@@ -3,7 +3,15 @@ from __future__ import annotations
 
 import dearpygui.dearpygui as dpg
 
-from common import APP_TITLE, ZOOM_MAX, ZOOM_MIN, ZOOM_WHEEL_STEP
+from common import (
+    APP_TITLE,
+    AREA_EXCLUDE_RADIUS_DEFAULT,
+    AREA_EXCLUDE_RADIUS_MAX,
+    AREA_EXCLUDE_RADIUS_MIN,
+    ZOOM_MAX,
+    ZOOM_MIN,
+    ZOOM_WHEEL_STEP,
+)
 from document.image_document import ImageDocument
 from fonts.korean_font_manager import KoreanFontManager
 from history.image_history_cache import ImageHistoryCache
@@ -42,11 +50,15 @@ class AssetEditorApplication:
         self.grayscale_check_tag = "grayscale_check"
         self.edge_check_tag = "edge_check"
         self.transparency_mode_combo_tag = "transparency_mode_combo"
+        self.area_exclude_check_tag = "area_exclude_check"
+        self.area_exclude_radius_tag = "area_exclude_radius"
         self.transparency_selection_summary_tag = "transparency_selection_text"
         self.selection_overlay_tag = "selection_overlay"
         self.selection_rectangle_tag = "selection_rectangle"
         self.zoom_slider_tag = "zoom_slider"
         self.zoom_slider_enabled = False
+        self.area_exclude_enabled = False
+        self.area_exclude_radius = AREA_EXCLUDE_RADIUS_DEFAULT
         self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
         self.wheel_scroll_blocked = False
 
@@ -217,6 +229,28 @@ class AssetEditorApplication:
                 self.help_widget.add_icon(
                     "컬러, 사각형, 클릭 영역 기준으로 투명 처리 대상을 선택합니다.",
                 )
+            self.help_widget.add_checkbox(
+                label="영역 제외 모드",
+                tag=self.area_exclude_check_tag,
+                tooltip=(
+                    "영역 선택 상태에서 켜면 View 클릭 위치 주변의 "
+                    "작은 원형 영역을 현재 선택 영역에서 제외합니다."
+                ),
+                callback=self._on_area_exclude_mode_changed,
+            )
+            with dpg.group(horizontal=True):
+                dpg.add_text("제외 반경")
+                self.help_widget.add_icon(
+                    "영역 제외 모드에서 한 번 클릭할 때 제외할 반경입니다.",
+                )
+            dpg.add_slider_int(
+                tag=self.area_exclude_radius_tag,
+                default_value=self.area_exclude_radius,
+                min_value=AREA_EXCLUDE_RADIUS_MIN,
+                max_value=AREA_EXCLUDE_RADIUS_MAX,
+                width=-1,
+                callback=self._on_area_exclude_radius_changed,
+            )
             self.help_widget.add_button(
                 label="투명 처리 적용",
                 tooltip="현재 선택한 컬러 또는 영역 기준으로 alpha를 0으로 만듭니다.",
@@ -326,9 +360,25 @@ class AssetEditorApplication:
 
     def _on_transparency_mode_changed(self, _sender, app_data) -> None:
         self.transparency_selection.set_mode(str(app_data))
+        if self.transparency_selection.mode != TransparencySelectionMode.AREA:
+            self.area_exclude_enabled = False
         self._clear_selection_overlay()
+        self._sync_area_exclude_state()
         self._update_selection_summary()
         self._apply_preview()
+
+    def _on_area_exclude_mode_changed(self, _sender, app_data) -> None:
+        if self.transparency_selection.mode != TransparencySelectionMode.AREA:
+            self.area_exclude_enabled = False
+            self._sync_area_exclude_state()
+            return
+
+        self.area_exclude_enabled = bool(app_data)
+        self._update_selection_summary()
+
+    def _on_area_exclude_radius_changed(self, _sender, app_data) -> None:
+        self.area_exclude_radius = int(app_data)
+        self._update_selection_summary()
 
     def _apply_transparency_selection(self) -> None:
         if self.document.working_image is None:
@@ -350,6 +400,8 @@ class AssetEditorApplication:
             )
             transparent_pixels = int(area_mask.sum())
             self.transparency_selection.clear()
+            self.area_exclude_enabled = False
+            self._sync_area_exclude_state()
             self._apply_preview()
             self._update_selection_summary()
             self._set_status(
@@ -375,7 +427,9 @@ class AssetEditorApplication:
 
     def _clear_transparency_selection(self) -> None:
         self.transparency_selection.clear()
+        self.area_exclude_enabled = False
         self._clear_selection_overlay()
+        self._sync_area_exclude_state()
         self._update_selection_summary()
         self._apply_preview()
         self._set_status("투명 처리 선택을 해제했습니다.")
@@ -525,6 +579,8 @@ class AssetEditorApplication:
         self.options.reset()
         self.document.reset_working_image()
         self.transparency_selection.clear()
+        self.area_exclude_enabled = False
+        self.area_exclude_radius = AREA_EXCLUDE_RADIUS_DEFAULT
         self._clear_selection_overlay()
         self._sync_controls()
         self._update_selection_summary()
@@ -552,6 +608,8 @@ class AssetEditorApplication:
             self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
             self.zoom_slider_tag: self.options.zoom,
             self.transparency_mode_combo_tag: self.transparency_selection.mode,
+            self.area_exclude_check_tag: self.area_exclude_enabled,
+            self.area_exclude_radius_tag: self.area_exclude_radius,
         }
 
         for tag, value in control_values.items():
@@ -559,6 +617,7 @@ class AssetEditorApplication:
                 dpg.set_value(tag, value)
 
         self._sync_zoom_slider_state()
+        self._sync_area_exclude_state()
 
     def _sync_zoom_slider_state(self) -> None:
         if dpg.does_item_exist(self.zoom_slider_tag):
@@ -567,6 +626,22 @@ class AssetEditorApplication:
                 enabled=self.zoom_slider_enabled,
             )
         self._sync_wheel_scroll_block()
+
+    def _sync_area_exclude_state(self) -> None:
+        if not dpg.does_item_exist(self.area_exclude_check_tag):
+            return
+
+        area_mode = (
+            self.transparency_selection.mode == TransparencySelectionMode.AREA
+        )
+        dpg.configure_item(self.area_exclude_check_tag, enabled=area_mode)
+        dpg.set_value(self.area_exclude_check_tag, self.area_exclude_enabled)
+        if dpg.does_item_exist(self.area_exclude_radius_tag):
+            dpg.configure_item(self.area_exclude_radius_tag, enabled=area_mode)
+            dpg.set_value(
+                self.area_exclude_radius_tag,
+                self.area_exclude_radius,
+            )
 
     def _apply_preview(self) -> None:
         if self.document.working_image is None:
@@ -685,6 +760,10 @@ class AssetEditorApplication:
         if self.document.working_image is None:
             return
 
+        if self.area_exclude_enabled:
+            self._exclude_area_at_point(image_point)
+            return
+
         area_mask = self.transparency_processor.collect_area_mask(
             self.document.working_image,
             image_point,
@@ -702,6 +781,47 @@ class AssetEditorApplication:
         self._apply_preview()
         self._set_status(
             f"영역 {int(area_mask.sum())}픽셀을 선택했습니다.",
+        )
+
+    def _exclude_area_at_point(self, image_point: tuple[int, int]) -> None:
+        if self.document.working_image is None:
+            return
+
+        current_mask = self.transparency_selection.area_mask
+        if current_mask is None or not current_mask.any():
+            self._set_status("먼저 제외 기준이 될 영역을 선택하세요.")
+            return
+
+        exclude_mask = self.transparency_processor.collect_circular_mask(
+            self.document.working_image.size,
+            image_point,
+            self.area_exclude_radius,
+        )
+        overlap_mask = current_mask & exclude_mask
+        if not overlap_mask.any():
+            self._set_status("현재 선택 영역과 겹치는 제외 영역이 없습니다.")
+            return
+
+        next_mask = self.transparency_processor.subtract_area_mask(
+            current_mask,
+            exclude_mask,
+        )
+        removed_pixels = int(overlap_mask.sum())
+        if not next_mask.any():
+            self.transparency_selection.clear()
+            self.area_exclude_enabled = False
+            self._sync_area_exclude_state()
+            self._update_selection_summary()
+            self._apply_preview()
+            self._set_status("제외 후 남은 선택 영역이 없습니다.")
+            return
+
+        seed_point = self.transparency_selection.area_seed_point or image_point
+        self.transparency_selection.set_area_mask(seed_point, next_mask)
+        self._update_selection_summary()
+        self._apply_preview()
+        self._set_status(
+            f"선택 영역에서 {removed_pixels}픽셀을 제외했습니다.",
         )
 
     def _get_mouse_image_point(
@@ -813,13 +933,20 @@ class AssetEditorApplication:
 
         selection = self.transparency_selection
         if selection.mode == TransparencySelectionMode.AREA:
+            exclude_status = "켜짐" if self.area_exclude_enabled else "꺼짐"
             if selection.area_mask is None:
-                message = "영역 선택: View에서 처리할 영역을 클릭하세요."
+                message = (
+                    "영역 선택: View에서 처리할 영역을 클릭하세요."
+                    f"\n제외 모드: {exclude_status}"
+                    f"\n제외 반경: {self.area_exclude_radius}px"
+                )
             else:
                 seed_x, seed_y = selection.area_seed_point or (0, 0)
                 message = (
                     f"선택 영역: {int(selection.area_mask.sum())}픽셀"
                     f"\n기준점: {seed_x}, {seed_y}"
+                    f"\n제외 모드: {exclude_status}"
+                    f"\n제외 반경: {self.area_exclude_radius}px"
                 )
         elif not selection.selected_colors:
             message = "선택 없음"

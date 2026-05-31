@@ -88,6 +88,41 @@ class TransparencyWorkflowTest(unittest.TestCase):
         self.assertFalse(area_mask[0, 0])
         self.assertTrue(area_mask[20, 20])
 
+    def test_area_mask_subtraction_removes_only_excluded_pixels(self) -> None:
+        base_mask = np.ones((3, 3), dtype=bool)
+        exclude_mask = np.zeros((3, 3), dtype=bool)
+        exclude_mask[1, :] = True
+
+        result = self.processor.subtract_area_mask(base_mask, exclude_mask)
+
+        self.assertEqual(int(result.sum()), 6)
+        self.assertTrue(result[0, 0])
+        self.assertFalse(result[1, 1])
+        self.assertTrue(result[2, 2])
+
+    def test_area_mask_subtraction_rejects_different_size(self) -> None:
+        base_mask = np.ones((3, 3), dtype=bool)
+        exclude_mask = np.ones((2, 2), dtype=bool)
+
+        with self.assertRaises(ValueError):
+            self.processor.subtract_area_mask(base_mask, exclude_mask)
+
+    def test_circular_mask_supports_local_area_exclusion(self) -> None:
+        image = Image.new("RGBA", (40, 40), (255, 255, 255, 255))
+
+        selection_mask = self.processor.collect_area_mask(image, (20, 20))
+        exclude_mask = self.processor.collect_circular_mask(
+            image.size,
+            (20, 20),
+            3,
+        )
+        result = self.processor.subtract_area_mask(selection_mask, exclude_mask)
+
+        self.assertGreater(int(selection_mask.sum()), 1000)
+        self.assertLess(int(exclude_mask.sum()), 40)
+        self.assertFalse(result[20, 20])
+        self.assertTrue(result[0, 0])
+
     def test_selection_highlight_only_changes_masked_preview_pixels(self) -> None:
         image = Image.new("RGBA", (3, 3), (10, 20, 30, 255))
         area_mask = np.zeros((3, 3), dtype=bool)
@@ -158,6 +193,8 @@ class TransparencyWorkflowTest(unittest.TestCase):
                 app._build_controls()
 
             self.assertTrue(dpg.does_item_exist(app.transparency_mode_combo_tag))
+            self.assertTrue(dpg.does_item_exist(app.area_exclude_check_tag))
+            self.assertTrue(dpg.does_item_exist(app.area_exclude_radius_tag))
             self.assertTrue(
                 dpg.does_item_exist(app.transparency_selection_summary_tag),
             )
