@@ -8,7 +8,7 @@
             "name": "assetEditor",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}\\asset_editor_application.py",
+            "program": "${workspaceFolder}\\src\\asset_editor_application.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",

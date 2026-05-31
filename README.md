@@ -53,7 +53,7 @@ Dear PyGui + Pillow/OpenCV 기반의 간단한 이미지 프리뷰 도구입니�
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python asset_editor_application.py
+python src\asset_editor_application.py
 ```
 
 ## 구조
@@ -66,8 +66,21 @@ python asset_editor_application.py
 |   |-- launch.json            # venv 기반 실행 설정
 |   `-- settings.json          # VS Code UTF-8/인터프리터 설정
 |-- .cache/                    # 실행 중 생성되는 히스토리 cache
-|-- asset_editor_application.py # Dear PyGui 앱 진입점
-|-- requirements.txt  # 런타임 의존성
-|-- README.md         # 설계와 실행 방법
+|-- src/
+|   |-- asset_editor_application.py # Dear PyGui 앱 진입점
+|   |-- common.py                   # 공통 상수
+|   |-- document/
+|   |   `-- image_document.py       # 이미지 로드/저장 도메인
+|   |-- fonts/
+|   |   `-- korean_font_manager.py  # 한글 폰트 등록
+|   |-- history/
+|   |   `-- image_history_cache.py  # 최근 이미지 cache
+|   |-- preview/
+|   |   |-- image_preview_processor.py # 프리뷰 처리
+|   |   `-- preview_options.py      # 프리뷰 옵션 상태
+|   `-- ui/
+|       `-- help_widget.py          # 도움말 UI 위젯
+|-- requirements.txt                # 런타임 의존성
+|-- README.md                       # 설계와 실행 방법
 `-- LICENSE
 ```

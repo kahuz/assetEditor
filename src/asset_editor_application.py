@@ -1,175 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
-
-import cv2
 import dearpygui.dearpygui as dpg
-import numpy as np
-from PIL import Image, ImageOps
 
-
-APP_TITLE = "assetEditor"
-DEFAULT_CANVAS_WIDTH = 960
-DEFAULT_CANVAS_HEIGHT = 640
-DEFAULT_FONT_SIZE = 18
-CACHE_FILE_PATH = Path(".cache/asset_editor_history.json")
-MAX_HISTORY_SIZE = 20
-KOREAN_FONT_PATHS = (
-    Path("C:/Windows/Fonts/malgun.ttf"),
-    Path("C:/Windows/Fonts/NotoSansKR-Regular.otf"),
-)
-
-
-@dataclass
-class ImageDocument:
-    source_path: Path | None = None
-    original_image: Image.Image | None = None
-    preview_image: Image.Image | None = None
-
-    def load(self, path: str) -> None:
-        image_path = Path(path)
-        self.original_image = Image.open(image_path).convert("RGBA")
-        self.preview_image = self.original_image.copy()
-        self.source_path = image_path
-
-    def save(self, path: str) -> None:
-        if self.preview_image is None:
-            raise ValueError("저장할 이미지가 없습니다.")
-
-        save_path = Path(path)
-        image = self.preview_image
-        if save_path.suffix.lower() in {".jpg", ".jpeg"}:
-            image = image.convert("RGB")
-        image.save(save_path)
-
-    def has_image(self) -> bool:
-        return self.original_image is not None and self.preview_image is not None
-
-
-@dataclass
-class PreviewOptions:
-    grayscale: bool = False
-    edge_preview: bool = False
-    zoom: float = 1.0
-
-    def reset(self) -> None:
-        self.grayscale = False
-        self.edge_preview = False
-        self.zoom = 1.0
-
-
-class ImagePreviewProcessor:
-    def apply(self, image: Image.Image, options: PreviewOptions) -> Image.Image:
-        preview = image.copy().convert("RGBA")
-
-        if options.grayscale:
-            preview = ImageOps.grayscale(preview).convert("RGBA")
-
-        if options.edge_preview:
-            rgb_array = np.array(preview.convert("RGB"))
-            gray_array = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
-            edge_array = cv2.Canny(gray_array, 80, 160)
-            preview = Image.fromarray(edge_array).convert("RGBA")
-
-        return preview
-
-    def resize_for_canvas(
-        self,
-        image: Image.Image,
-        zoom: float,
-        canvas_width: int = DEFAULT_CANVAS_WIDTH,
-        canvas_height: int = DEFAULT_CANVAS_HEIGHT,
-    ) -> Image.Image:
-        max_width = max(1, int(canvas_width * zoom))
-        max_height = max(1, int(canvas_height * zoom))
-        preview = image.convert("RGBA").copy()
-        preview.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-        return preview
-
-    def to_texture_data(self, image: Image.Image) -> list[float]:
-        rgba_array = np.asarray(image.convert("RGBA"), dtype=np.float32) / 255.0
-        return rgba_array.ravel().tolist()
-
-
-class KoreanFontManager:
-    def __init__(
-        self,
-        font_paths: tuple[Path, ...] = KOREAN_FONT_PATHS,
-        font_size: int = DEFAULT_FONT_SIZE,
-    ) -> None:
-        self.font_paths = font_paths
-        self.font_size = font_size
-        self.font_tag = "korean_default_font"
-
-    def bind(self) -> None:
-        font_path = self._find_font_path()
-        if font_path is None:
-            return
-
-        with dpg.font_registry():
-            dpg.add_font(str(font_path), self.font_size, tag=self.font_tag)
-
-        dpg.bind_font(self.font_tag)
-
-    def _find_font_path(self) -> Path | None:
-        for font_path in self.font_paths:
-            if font_path.exists():
-                return font_path
-        return None
-
-
-class ImageHistoryCache:
-    def __init__(
-        self,
-        cache_path: Path = CACHE_FILE_PATH,
-        max_history_size: int = MAX_HISTORY_SIZE,
-    ) -> None:
-        self.cache_path = cache_path
-        self.max_history_size = max_history_size
-        self.history = self.load()
-
-    def load(self) -> list[str]:
-        if not self.cache_path.exists():
-            return []
-
-        try:
-            cache_data = json.loads(
-                self.cache_path.read_text(encoding="utf-8"),
-            )
-        except (OSError, json.JSONDecodeError):
-            return []
-
-        paths = cache_data.get("paths", [])
-        if not isinstance(paths, list):
-            return []
-
-        return [path for path in paths if isinstance(path, str)]
-
-    def add(self, path: str) -> None:
-        history_path = str(Path(path).resolve())
-        self.history = [
-            saved_path
-            for saved_path in self.history
-            if saved_path.lower() != history_path.lower()
-        ]
-        self.history.insert(0, history_path)
-        self.history = self.history[: self.max_history_size]
-        self.save()
-
-    def clear(self) -> None:
-        self.history = []
-        self.save()
-
-    def save(self) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_data = {"paths": self.history}
-        self.cache_path.write_text(
-            json.dumps(cache_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+from common import APP_TITLE
+from document.image_document import ImageDocument
+from fonts.korean_font_manager import KoreanFontManager
+from history.image_history_cache import ImageHistoryCache
+from preview.image_preview_processor import ImagePreviewProcessor
+from preview.preview_options import PreviewOptions
+from ui.help_widget import HelpWidget
 
 
 class AssetEditorApplication:
@@ -179,6 +19,7 @@ class AssetEditorApplication:
         self.processor = ImagePreviewProcessor()
         self.font_manager = KoreanFontManager()
         self.history_cache = ImageHistoryCache()
+        self.help_widget = HelpWidget()
         self.texture_tag = "preview_texture"
         self.preview_image_tag = "preview_image"
         self.empty_preview_tag = "empty_preview_text"
@@ -265,17 +106,17 @@ class AssetEditorApplication:
         with dpg.child_window(width=300, autosize_y=True, border=True):
             dpg.add_text("도구")
             dpg.add_separator()
-            self._add_button_with_help(
+            self.help_widget.add_button(
                 label="이미지 열기",
                 tooltip="편집하거나 확인할 이미지 파일을 불러옵니다.",
                 callback=lambda: dpg.show_item("open_dialog"),
             )
-            self._add_button_with_help(
+            self.help_widget.add_button(
                 label="다른 이름으로 저장",
                 tooltip="현재 프리뷰 결과를 새 이미지 파일로 저장합니다.",
                 callback=lambda: dpg.show_item("save_dialog"),
             )
-            self._add_button_with_help(
+            self.help_widget.add_button(
                 label="초기화",
                 tooltip="프리뷰 옵션을 기본값으로 되돌립니다.",
                 callback=self._reset_preview,
@@ -283,7 +124,7 @@ class AssetEditorApplication:
 
             dpg.add_spacer(height=10)
             dpg.add_text("최근 이미지")
-            self._add_combo_with_help(
+            self.help_widget.add_combo(
                 tag=self.history_combo_tag,
                 tooltip=(
                     "이전에 열었던 이미지 경로입니다. "
@@ -291,12 +132,12 @@ class AssetEditorApplication:
                 ),
                 items=self.history_cache.history,
             )
-            self._add_button_with_help(
+            self.help_widget.add_button(
                 label="히스토리 열기",
                 tooltip="최근 이미지 목록에서 선택한 파일을 다시 엽니다.",
                 callback=self._open_selected_history,
             )
-            self._add_button_with_help(
+            self.help_widget.add_button(
                 label="히스토리 비우기",
                 tooltip="저장된 최근 이미지 cache를 비웁니다.",
                 callback=self._clear_history,
@@ -304,13 +145,13 @@ class AssetEditorApplication:
 
             dpg.add_spacer(height=10)
             dpg.add_text("프리뷰")
-            self._add_checkbox_with_help(
+            self.help_widget.add_checkbox(
                 label="그레이스케일",
                 tag="grayscale_check",
                 tooltip="이미지를 흑백으로 변환해 색상 없이 명암만 확인합니다.",
                 callback=self._on_grayscale_changed,
             )
-            self._add_checkbox_with_help(
+            self.help_widget.add_checkbox(
                 label="엣지 프리뷰",
                 tag="edge_check",
                 tooltip=(
@@ -319,7 +160,7 @@ class AssetEditorApplication:
                 ),
                 callback=self._on_edge_preview_changed,
             )
-            self._add_slider_with_help(
+            self.help_widget.add_slider(
                 label="확대",
                 tag="zoom_slider",
                 tooltip="프리뷰 표시 크기를 확대하거나 축소합니다.",
@@ -332,59 +173,6 @@ class AssetEditorApplication:
             dpg.add_spacer(height=10)
             dpg.add_text("이미지 정보")
             dpg.add_text("로드된 이미지 없음", tag=self.metadata_tag, wrap=270)
-
-    def _add_button_with_help(self, label: str, tooltip: str, callback) -> None:
-        with dpg.group(horizontal=True):
-            dpg.add_button(label=label, width=250, callback=callback)
-            self._add_help_icon(tooltip)
-
-    def _add_checkbox_with_help(
-        self,
-        label: str,
-        tag: str,
-        tooltip: str,
-        callback,
-    ) -> None:
-        with dpg.group(horizontal=True):
-            dpg.add_checkbox(label=label, tag=tag, callback=callback)
-            self._add_help_icon(tooltip)
-
-    def _add_combo_with_help(
-        self,
-        tag: str,
-        tooltip: str,
-        items: list[str],
-    ) -> None:
-        with dpg.group(horizontal=True):
-            dpg.add_combo(items, tag=tag, width=250)
-            self._add_help_icon(tooltip)
-
-    def _add_slider_with_help(
-        self,
-        label: str,
-        tag: str,
-        tooltip: str,
-        default_value: float,
-        min_value: float,
-        max_value: float,
-        callback,
-    ) -> None:
-        with dpg.group(horizontal=True):
-            dpg.add_text(label)
-            self._add_help_icon(tooltip)
-        dpg.add_slider_float(
-            tag=tag,
-            default_value=default_value,
-            min_value=min_value,
-            max_value=max_value,
-            callback=callback,
-            width=-1,
-        )
-
-    def _add_help_icon(self, tooltip: str) -> None:
-        help_item = dpg.add_text("?", color=(120, 170, 255, 255))
-        with dpg.tooltip(help_item):
-            dpg.add_text(tooltip, wrap=260)
 
     def _build_preview_area(self) -> None:
         with dpg.child_window(autosize_x=True, autosize_y=True, border=True):
