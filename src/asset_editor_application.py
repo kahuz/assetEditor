@@ -218,6 +218,7 @@ class AssetEditorApplication:
                 tooltip=(
                     "체크하면 확대 배율을 조정할 수 있습니다. "
                     "View 영역에서는 마우스 휠로도 조정할 수 있습니다. "
+                    "Ctrl+휠은 체크 여부와 관계없이 동작합니다. "
                     "체크를 해제해도 현재 확대 값은 유지됩니다."
                 ),
                 default_value=1.0,
@@ -229,7 +230,10 @@ class AssetEditorApplication:
             self.help_widget.add_checkbox(
                 label="손 도구",
                 tag=self.preview_pan_check_tag,
-                tooltip="켜면 View에서 드래그로 확대된 이미지를 이동합니다.",
+                tooltip=(
+                    "켜면 View에서 드래그로 확대된 이미지를 이동합니다. "
+                    "Ctrl+드래그는 체크 여부와 관계없이 동작합니다."
+                ),
                 callback=self._on_preview_pan_enabled_changed,
             )
 
@@ -670,13 +674,11 @@ class AssetEditorApplication:
         return zoom_active
 
     def _is_preview_wheel_zoom_active(self) -> bool:
-        if not self.zoom_slider_enabled:
+        if not self.zoom_slider_enabled and not self._is_control_key_down():
             return False
         if self.document.preview_image is None:
             return False
-        if not dpg.does_item_exist(self.preview_area_tag):
-            return False
-        return bool(dpg.is_item_hovered(self.preview_area_tag))
+        return self._is_preview_area_hovered()
 
     def _set_wheel_scroll_blocked(self, blocked: bool) -> None:
         if self.wheel_scroll_blocked == blocked:
@@ -695,13 +697,26 @@ class AssetEditorApplication:
         return bool(dpg.is_item_hovered(self.preview_image_tag))
 
     def _is_preview_pan_start_active(self) -> bool:
-        if not self.preview_pan_enabled:
+        if not self.preview_pan_enabled and not self._is_control_key_down():
             return False
         if self.document.preview_image is None:
             return False
+        return self._is_preview_area_hovered()
+
+    def _is_preview_area_hovered(self) -> bool:
         if not dpg.does_item_exist(self.preview_area_tag):
             return False
         return bool(dpg.is_item_hovered(self.preview_area_tag))
+
+    def _is_control_key_down(self) -> bool:
+        return any(
+            dpg.is_key_down(key_code)
+            for key_code in (
+                dpg.mvKey_ModCtrl,
+                dpg.mvKey_LControl,
+                dpg.mvKey_RControl,
+            )
+        )
 
     def _start_preview_pan(self) -> bool:
         if not self._is_preview_pan_start_active():

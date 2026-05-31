@@ -426,6 +426,33 @@ class TransparencyWorkflowTest(unittest.TestCase):
         finally:
             dpg.destroy_context()
 
+    def test_control_wheel_enables_zoom_without_zoom_checkbox(self) -> None:
+        app = AssetEditorApplication()
+        app.document.preview_image = Image.new("RGBA", (10, 10))
+        app.zoom_slider_enabled = False
+        app._is_control_key_down = lambda: True
+        app._is_preview_area_hovered = lambda: True
+
+        self.assertTrue(app._is_preview_wheel_zoom_active())
+
+    def test_control_drag_enables_pan_without_hand_tool(self) -> None:
+        app = AssetEditorApplication()
+        app.document.preview_image = Image.new("RGBA", (10, 10))
+        app.preview_pan_enabled = False
+        app._is_control_key_down = lambda: True
+        app._is_preview_area_hovered = lambda: True
+
+        self.assertTrue(app._is_preview_pan_start_active())
+
+    def test_preview_pan_needs_tool_or_control_key(self) -> None:
+        app = AssetEditorApplication()
+        app.document.preview_image = Image.new("RGBA", (10, 10))
+        app.preview_pan_enabled = False
+        app._is_control_key_down = lambda: False
+        app._is_preview_area_hovered = lambda: True
+
+        self.assertFalse(app._is_preview_pan_start_active())
+
     def test_preview_pan_drag_updates_view_scroll(self) -> None:
         app = AssetEditorApplication()
         mouse_positions = [(10.0, 10.0)]
