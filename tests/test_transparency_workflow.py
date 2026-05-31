@@ -20,6 +20,7 @@ from document.image_document import ImageDocument
 from transparency.image_transparency_processor import ImageTransparencyProcessor
 from transparency.transparency_selection import (
     ImageSelectionRectangle,
+    TransparencyExcludeMode,
     TransparencySelectionMode,
 )
 
@@ -106,6 +107,35 @@ class TransparencyWorkflowTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.processor.subtract_area_mask(base_mask, exclude_mask)
+
+    def test_rectangle_mask_supports_manual_area_exclusion(self) -> None:
+        rectangle = ImageSelectionRectangle(1, 1, 3, 2)
+
+        exclude_mask = self.processor.collect_rectangle_mask(
+            (5, 4),
+            rectangle,
+        )
+
+        self.assertEqual(int(exclude_mask.sum()), 6)
+        self.assertTrue(exclude_mask[1, 1])
+        self.assertTrue(exclude_mask[2, 3])
+        self.assertFalse(exclude_mask[0, 0])
+
+    def test_freeform_mask_supports_manual_area_exclusion(self) -> None:
+        points = [(1, 1), (4, 1), (1, 4)]
+
+        exclude_mask = self.processor.collect_freeform_mask((6, 6), points)
+
+        self.assertTrue(exclude_mask[2, 2])
+        self.assertFalse(exclude_mask[5, 5])
+
+    def test_freeform_mask_requires_enough_points(self) -> None:
+        exclude_mask = self.processor.collect_freeform_mask(
+            (6, 6),
+            [(1, 1), (2, 2)],
+        )
+
+        self.assertEqual(int(exclude_mask.sum()), 0)
 
     def test_detail_area_mask_supports_area_based_exclusion(self) -> None:
         image = Image.new("RGBA", (40, 20), (255, 255, 255, 255))
@@ -210,13 +240,29 @@ class TransparencyWorkflowTest(unittest.TestCase):
 
             self.assertTrue(dpg.does_item_exist(app.transparency_mode_combo_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_check_tag))
+            self.assertTrue(dpg.does_item_exist(app.area_exclude_mode_combo_tag))
             self.assertTrue(
                 dpg.does_item_exist(app.transparency_selection_summary_tag),
             )
             self.assertIn("영역 선택", TransparencySelectionMode.labels())
+            self.assertIn("사각형", TransparencyExcludeMode.labels())
+            self.assertIn("자유형", TransparencyExcludeMode.labels())
             self.assertNotIn("외곽 선택", TransparencySelectionMode.labels())
         finally:
             dpg.destroy_context()
+
+    def test_area_exclude_drag_start_is_not_restarted(self) -> None:
+        app = AssetEditorApplication()
+        app.transparency_selection.mode = TransparencySelectionMode.AREA
+        app.area_exclude_enabled = True
+        app.area_exclude_mode = TransparencyExcludeMode.RECTANGLE
+        app._update_selection_overlay = lambda: None
+
+        self.assertTrue(app._start_area_exclude_drag((1, 1)))
+        self.assertTrue(app._start_area_exclude_drag((5, 5)))
+
+        self.assertEqual(app.transparency_selection.drag_start, (1, 1))
+        self.assertEqual(app.transparency_selection.drag_end, (1, 1))
 
     def test_preview_processor_keeps_grayscale_and_edge_views(self) -> None:
         from preview.image_preview_processor import ImagePreviewProcessor

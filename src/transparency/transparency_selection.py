@@ -20,6 +20,16 @@ class TransparencySelectionMode:
         return [cls.COLOR, cls.RECTANGLE, cls.AREA]
 
 
+class TransparencyExcludeMode:
+    DETAIL = "세부 영역"
+    RECTANGLE = "사각형"
+    FREEFORM = "자유형"
+
+    @classmethod
+    def labels(cls) -> list[str]:
+        return [cls.DETAIL, cls.RECTANGLE, cls.FREEFORM]
+
+
 @dataclass(frozen=True)
 class ImageSelectionRectangle:
     left: int
@@ -70,6 +80,7 @@ class TransparencySelection:
     area_mask: np.ndarray | None = None
     drag_start: ImagePoint | None = None
     drag_end: ImagePoint | None = None
+    freeform_points: list[ImagePoint] = field(default_factory=list)
 
     def set_mode(self, mode: str) -> None:
         if mode not in TransparencySelectionMode.labels():
@@ -83,8 +94,7 @@ class TransparencySelection:
         self.rectangle = None
         self.area_seed_point = None
         self.area_mask = None
-        self.drag_start = None
-        self.drag_end = None
+        self.clear_drag_state()
 
     def set_rectangle(
         self,
@@ -95,8 +105,7 @@ class TransparencySelection:
         self.selected_colors = set(colors)
         self.area_seed_point = None
         self.area_mask = None
-        self.drag_start = None
-        self.drag_end = None
+        self.clear_drag_state()
 
     def set_area_mask(
         self,
@@ -107,12 +116,12 @@ class TransparencySelection:
         self.area_mask = area_mask.copy()
         self.selected_colors.clear()
         self.rectangle = None
-        self.drag_start = None
-        self.drag_end = None
+        self.clear_drag_state()
 
     def start_drag(self, point: ImagePoint) -> None:
         self.drag_start = point
         self.drag_end = point
+        self.freeform_points.clear()
 
     def update_drag(self, point: ImagePoint) -> None:
         if self.drag_start is None:
@@ -129,10 +138,30 @@ class TransparencySelection:
             self.drag_end,
         )
 
+    def start_freeform(self, point: ImagePoint) -> None:
+        self.drag_start = point
+        self.drag_end = point
+        self.freeform_points = [point]
+
+    def add_freeform_point(self, point: ImagePoint) -> None:
+        if not self.freeform_points:
+            self.start_freeform(point)
+            return
+
+        if self.freeform_points[-1] == point:
+            return
+
+        self.drag_end = point
+        self.freeform_points.append(point)
+
+    def clear_drag_state(self) -> None:
+        self.drag_start = None
+        self.drag_end = None
+        self.freeform_points.clear()
+
     def clear(self) -> None:
         self.selected_colors.clear()
         self.rectangle = None
         self.area_seed_point = None
         self.area_mask = None
-        self.drag_start = None
-        self.drag_end = None
+        self.clear_drag_state()

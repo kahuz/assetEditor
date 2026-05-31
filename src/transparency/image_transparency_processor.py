@@ -94,6 +94,38 @@ class ImageTransparencyProcessor:
         result_array[:, :, 3][normalized_mask] = 0
         return Image.fromarray(result_array)
 
+    def collect_rectangle_mask(
+        self,
+        image_size: tuple[int, int],
+        rectangle: ImageSelectionRectangle,
+    ) -> np.ndarray:
+        image_width, image_height = image_size
+        clamped_rectangle = rectangle.clamp(image_width, image_height)
+        mask = np.zeros((image_height, image_width), dtype=bool)
+        mask[
+            clamped_rectangle.top : clamped_rectangle.bottom + 1,
+            clamped_rectangle.left : clamped_rectangle.right + 1,
+        ] = True
+        return mask
+
+    def collect_freeform_mask(
+        self,
+        image_size: tuple[int, int],
+        points: list[ImagePoint],
+    ) -> np.ndarray:
+        image_width, image_height = image_size
+        mask = np.zeros((image_height, image_width), dtype=np.uint8)
+        if len(points) < 3:
+            return mask.astype(bool)
+
+        clipped_points = [
+            self._clamp_point(point, mask.shape)
+            for point in points
+        ]
+        polygon_array = np.asarray([clipped_points], dtype=np.int32)
+        cv2.fillPoly(mask, polygon_array, 1)
+        return mask.astype(bool)
+
     def subtract_area_mask(
         self,
         base_mask: np.ndarray,
