@@ -31,11 +31,32 @@ class ImagePreviewProcessor:
         canvas_width: int = DEFAULT_CANVAS_WIDTH,
         canvas_height: int = DEFAULT_CANVAS_HEIGHT,
     ) -> Image.Image:
-        max_width = max(1, int(canvas_width * zoom))
-        max_height = max(1, int(canvas_height * zoom))
-        preview = image.convert("RGBA").copy()
-        preview.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-        return preview
+        preview = image.convert("RGBA")
+        base_width, base_height = self._fit_size(
+            preview.width,
+            preview.height,
+            canvas_width,
+            canvas_height,
+        )
+        scaled_width = max(1, int(base_width * zoom))
+        scaled_height = max(1, int(base_height * zoom))
+
+        return preview.resize(
+            (scaled_width, scaled_height),
+            Image.Resampling.LANCZOS,
+        )
+
+    def _fit_size(
+        self,
+        width: int,
+        height: int,
+        canvas_width: int,
+        canvas_height: int,
+    ) -> tuple[int, int]:
+        fit_ratio = min(canvas_width / width, canvas_height / height, 1.0)
+        fit_width = max(1, int(width * fit_ratio))
+        fit_height = max(1, int(height * fit_ratio))
+        return fit_width, fit_height
 
     def to_texture_data(self, image: Image.Image) -> list[float]:
         rgba_array = np.asarray(image.convert("RGBA"), dtype=np.float32) / 255.0
