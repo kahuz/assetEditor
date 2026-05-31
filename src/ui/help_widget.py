@@ -38,28 +38,6 @@ class HelpWidget:
             dpg.add_combo(items, tag=tag, width=250)
             self.add_icon(tooltip)
 
-    def add_slider(
-        self,
-        label: str,
-        tag: str,
-        tooltip: str,
-        default_value: float,
-        min_value: float,
-        max_value: float,
-        callback: Callable,
-    ) -> None:
-        with dpg.group(horizontal=True):
-            dpg.add_text(label)
-            self.add_icon(tooltip)
-        dpg.add_slider_float(
-            tag=tag,
-            default_value=default_value,
-            min_value=min_value,
-            max_value=max_value,
-            callback=callback,
-            width=-1,
-        )
-
     def add_lockable_slider(
         self,
         label: str,

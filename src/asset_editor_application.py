@@ -26,9 +26,14 @@ class AssetEditorApplication:
         self.empty_preview_tag = "empty_preview_text"
         self.status_tag = "status_text"
         self.metadata_tag = "metadata_text"
+        self.open_dialog_tag = "open_dialog"
+        self.save_dialog_tag = "save_dialog"
         self.canvas_group_tag = "canvas_group"
         self.preview_area_tag = "preview_area"
         self.history_combo_tag = "history_combo"
+        self.grayscale_check_tag = "grayscale_check"
+        self.edge_check_tag = "edge_check"
+        self.zoom_slider_tag = "zoom_slider"
         self.zoom_slider_enabled = False
         self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
         self.wheel_scroll_blocked = False
@@ -66,7 +71,7 @@ class AssetEditorApplication:
             directory_selector=False,
             show=False,
             callback=self._on_file_open,
-            tag="open_dialog",
+            tag=self.open_dialog_tag,
             width=720,
             height=420,
         ):
@@ -80,7 +85,7 @@ class AssetEditorApplication:
             directory_selector=False,
             show=False,
             callback=self._on_file_save,
-            tag="save_dialog",
+            tag=self.save_dialog_tag,
             width=720,
             height=420,
             default_filename="preview.png",
@@ -94,11 +99,11 @@ class AssetEditorApplication:
             with dpg.menu(label="파일"):
                 dpg.add_menu_item(
                     label="열기",
-                    callback=lambda: dpg.show_item("open_dialog"),
+                    callback=lambda: dpg.show_item(self.open_dialog_tag),
                 )
                 dpg.add_menu_item(
                     label="다른 이름으로 저장",
-                    callback=lambda: dpg.show_item("save_dialog"),
+                    callback=lambda: dpg.show_item(self.save_dialog_tag),
                 )
             with dpg.menu(label="편집"):
                 dpg.add_menu_item(label="초기화", callback=self._reset_preview)
@@ -119,12 +124,12 @@ class AssetEditorApplication:
             self.help_widget.add_button(
                 label="이미지 열기",
                 tooltip="편집하거나 확인할 이미지 파일을 불러옵니다.",
-                callback=lambda: dpg.show_item("open_dialog"),
+                callback=lambda: dpg.show_item(self.open_dialog_tag),
             )
             self.help_widget.add_button(
                 label="다른 이름으로 저장",
                 tooltip="현재 프리뷰 결과를 새 이미지 파일로 저장합니다.",
-                callback=lambda: dpg.show_item("save_dialog"),
+                callback=lambda: dpg.show_item(self.save_dialog_tag),
             )
             self.help_widget.add_button(
                 label="초기화",
@@ -157,13 +162,13 @@ class AssetEditorApplication:
             dpg.add_text("프리뷰")
             self.help_widget.add_checkbox(
                 label="그레이스케일",
-                tag="grayscale_check",
+                tag=self.grayscale_check_tag,
                 tooltip="이미지를 흑백으로 변환해 색상 없이 명암만 확인합니다.",
                 callback=self._on_grayscale_changed,
             )
             self.help_widget.add_checkbox(
                 label="엣지 프리뷰",
-                tag="edge_check",
+                tag=self.edge_check_tag,
                 tooltip=(
                     "OpenCV Canny 알고리즘으로 이미지의 윤곽선만 "
                     "추출해 보여줍니다."
@@ -173,7 +178,7 @@ class AssetEditorApplication:
             self.help_widget.add_lockable_slider(
                 label="확대",
                 check_tag=self.zoom_slider_enabled_tag,
-                slider_tag="zoom_slider",
+                slider_tag=self.zoom_slider_tag,
                 tooltip=(
                     "체크하면 확대 배율을 조정할 수 있습니다. "
                     "프리뷰 영역에서는 마우스 휠로도 조정할 수 있습니다. "
@@ -216,16 +221,26 @@ class AssetEditorApplication:
             return
 
         selected_path = next(iter(selections.values()))
+        self._open_image_path(
+            selected_path,
+            success_message=f"이미지를 열었습니다: {selected_path}",
+            failure_prefix="이미지 열기 실패",
+        )
+
+    def _open_image_path(
+        self,
+        path: str,
+        success_message: str,
+        failure_prefix: str,
+    ) -> None:
         try:
-            self.document.load(selected_path)
-            self.history_cache.add(selected_path)
+            self.document.load(path)
+            self.history_cache.add(path)
             self._refresh_history_items()
-            self.options.reset()
-            self._sync_controls()
-            self._apply_preview()
-            self._set_status(f"이미지를 열었습니다: {selected_path}")
+            self._reset_options_and_refresh()
+            self._set_status(success_message)
         except Exception as exc:
-            self._set_status(f"이미지 열기 실패: {exc}")
+            self._set_status(f"{failure_prefix}: {exc}")
 
     def _on_file_save(self, _sender, app_data) -> None:
         file_path = app_data.get("file_path_name")
@@ -249,15 +264,13 @@ class AssetEditorApplication:
     def _on_zoom_slider_enabled_changed(self, _sender, app_data) -> None:
         self.zoom_slider_enabled = bool(app_data)
         self._sync_zoom_slider_state()
-        self._sync_wheel_scroll_block()
 
     def _on_zoom_changed(self, _sender, app_data) -> None:
         self.options.zoom = float(app_data)
         self._refresh_preview_texture()
 
     def _on_mouse_wheel(self, _sender, app_data) -> None:
-        self._sync_wheel_scroll_block()
-        if not self._is_preview_wheel_zoom_active():
+        if not self._sync_wheel_scroll_block():
             return
 
         scroll_position = self._get_primary_scroll_position()
@@ -267,10 +280,10 @@ class AssetEditorApplication:
     def _on_mouse_move(self, _sender, _app_data) -> None:
         self._sync_wheel_scroll_block()
 
-    def _sync_wheel_scroll_block(self) -> None:
-        self._set_wheel_scroll_blocked(
-            self._is_preview_wheel_zoom_active(),
-        )
+    def _sync_wheel_scroll_block(self) -> bool:
+        zoom_active = self._is_preview_wheel_zoom_active()
+        self._set_wheel_scroll_blocked(zoom_active)
+        return zoom_active
 
     def _is_preview_wheel_zoom_active(self) -> bool:
         if not self.zoom_slider_enabled:
@@ -294,8 +307,8 @@ class AssetEditorApplication:
         next_zoom = self.options.zoom + (wheel_delta * ZOOM_WHEEL_STEP)
         self.options.zoom = max(ZOOM_MIN, min(ZOOM_MAX, next_zoom))
 
-        if dpg.does_item_exist("zoom_slider"):
-            dpg.set_value("zoom_slider", self.options.zoom)
+        if dpg.does_item_exist(self.zoom_slider_tag):
+            dpg.set_value(self.zoom_slider_tag, self.options.zoom)
 
         self._refresh_preview_texture()
 
@@ -332,16 +345,13 @@ class AssetEditorApplication:
             self._set_status("선택된 히스토리가 없습니다.")
             return
 
-        try:
-            self.document.load(selected_path)
-            self.history_cache.add(selected_path)
-            self._refresh_history_items()
-            self.options.reset()
-            self._sync_controls()
-            self._apply_preview()
-            self._set_status(f"히스토리에서 이미지를 열었습니다: {selected_path}")
-        except Exception as exc:
-            self._set_status(f"히스토리 이미지 열기 실패: {exc}")
+        self._open_image_path(
+            selected_path,
+            success_message=(
+                f"히스토리에서 이미지를 열었습니다: {selected_path}"
+            ),
+            failure_prefix="히스토리 이미지 열기 실패",
+        )
 
     def _clear_history(self) -> None:
         self.history_cache.clear()
@@ -349,6 +359,9 @@ class AssetEditorApplication:
         self._set_status("이미지 히스토리를 비웠습니다.")
 
     def _reset_preview(self) -> None:
+        self._reset_options_and_refresh()
+
+    def _reset_options_and_refresh(self) -> None:
         self.options.reset()
         self._sync_controls()
         self._apply_preview()
@@ -370,10 +383,10 @@ class AssetEditorApplication:
 
     def _sync_controls(self) -> None:
         control_values = {
-            "grayscale_check": self.options.grayscale,
-            "edge_check": self.options.edge_preview,
+            self.grayscale_check_tag: self.options.grayscale,
+            self.edge_check_tag: self.options.edge_preview,
             self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
-            "zoom_slider": self.options.zoom,
+            self.zoom_slider_tag: self.options.zoom,
         }
 
         for tag, value in control_values.items():
@@ -383,9 +396,9 @@ class AssetEditorApplication:
         self._sync_zoom_slider_state()
 
     def _sync_zoom_slider_state(self) -> None:
-        if dpg.does_item_exist("zoom_slider"):
+        if dpg.does_item_exist(self.zoom_slider_tag):
             dpg.configure_item(
-                "zoom_slider",
+                self.zoom_slider_tag,
                 enabled=self.zoom_slider_enabled,
             )
         self._sync_wheel_scroll_block()
