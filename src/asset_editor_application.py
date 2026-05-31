@@ -128,12 +128,12 @@ class AssetEditorApplication:
             )
             self.help_widget.add_button(
                 label="다른 이름으로 저장",
-                tooltip="현재 프리뷰 결과를 새 이미지 파일로 저장합니다.",
+                tooltip="현재 View 결과를 새 이미지 파일로 저장합니다.",
                 callback=lambda: dpg.show_item(self.save_dialog_tag),
             )
             self.help_widget.add_button(
                 label="초기화",
-                tooltip="프리뷰 옵션을 기본값으로 되돌립니다.",
+                tooltip="View 옵션을 기본값으로 되돌립니다.",
                 callback=self._reset_preview,
             )
 
@@ -159,7 +159,7 @@ class AssetEditorApplication:
             )
 
             dpg.add_spacer(height=10)
-            dpg.add_text("프리뷰")
+            dpg.add_text("View")
             self.help_widget.add_checkbox(
                 label="그레이스케일",
                 tag=self.grayscale_check_tag,
@@ -167,7 +167,7 @@ class AssetEditorApplication:
                 callback=self._on_grayscale_changed,
             )
             self.help_widget.add_checkbox(
-                label="엣지 프리뷰",
+                label="엣지 View",
                 tag=self.edge_check_tag,
                 tooltip=(
                     "OpenCV Canny 알고리즘으로 이미지의 윤곽선만 "
@@ -181,7 +181,7 @@ class AssetEditorApplication:
                 slider_tag=self.zoom_slider_tag,
                 tooltip=(
                     "체크하면 확대 배율을 조정할 수 있습니다. "
-                    "프리뷰 영역에서는 마우스 휠로도 조정할 수 있습니다. "
+                    "View 영역에서는 마우스 휠로도 조정할 수 있습니다. "
                     "체크를 해제해도 현재 확대 값은 유지됩니다."
                 ),
                 default_value=1.0,
@@ -202,7 +202,7 @@ class AssetEditorApplication:
             border=True,
             tag=self.preview_area_tag,
         ):
-            dpg.add_text("프리뷰")
+            dpg.add_text("View")
             dpg.add_separator()
             with dpg.group(tag=self.canvas_group_tag):
                 dpg.add_text(
@@ -462,13 +462,13 @@ class AssetEditorApplication:
         )
         original_width, original_height = self.document.original_image.size
         preview_width, preview_height = self.document.preview_image.size
-        mode = "엣지 프리뷰" if self.options.edge_preview else "일반 프리뷰"
+        mode = "엣지 View" if self.options.edge_preview else "일반 View"
 
         dpg.set_value(
             self.metadata_tag,
             f"{source_name}\n"
             f"원본: {original_width} x {original_height}\n"
-            f"프리뷰: {preview_width} x {preview_height}\n"
+            f"View: {preview_width} x {preview_height}\n"
             f"모드: {mode}",
         )
 
