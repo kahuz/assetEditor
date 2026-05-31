@@ -17,6 +17,7 @@ if str(SRC_PATH) not in sys.path:
 
 from asset_editor_application import AssetEditorApplication
 from document.image_document import ImageDocument
+from history.image_history_cache import ImageHistoryCache
 from transparency.image_transparency_processor import ImageTransparencyProcessor
 from transparency.transparency_selection import (
     ImageSelectionRectangle,
@@ -218,6 +219,50 @@ class TransparencyWorkflowTest(unittest.TestCase):
                 )
             with Image.open(jpg_path) as jpg_image:
                 self.assertEqual(jpg_image.mode, "RGB")
+
+    def test_history_cache_returns_recent_image_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cache_path = temp_path / "cache.json"
+            image_path = temp_path / "source.png"
+            image_path.write_bytes(b"sample")
+            history_cache = ImageHistoryCache(cache_path=cache_path)
+
+            history_cache.add(str(image_path))
+
+            self.assertEqual(
+                history_cache.get_recent_image_directory(),
+                str(temp_path),
+            )
+
+    def test_history_cache_ignores_missing_recent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_cache = ImageHistoryCache(cache_path=temp_path / "cache.json")
+            history_cache.history = [str(temp_path / "missing" / "source.png")]
+
+            self.assertEqual(history_cache.get_recent_image_directory(), "")
+
+    def test_open_dialog_uses_recent_image_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "source.png"
+            image_path.write_bytes(b"sample")
+            app = AssetEditorApplication()
+            app.history_cache.history = [str(image_path)]
+            dpg.create_context()
+            try:
+                app._build_file_dialogs()
+                app._sync_open_dialog_default_path()
+
+                self.assertEqual(
+                    dpg.get_item_configuration(
+                        app.open_dialog_tag,
+                    )["default_path"],
+                    str(temp_path),
+                )
+            finally:
+                dpg.destroy_context()
 
     def test_zoomed_display_point_maps_to_image_bounds(self) -> None:
         app = AssetEditorApplication()

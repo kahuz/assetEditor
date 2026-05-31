@@ -45,6 +45,17 @@ class ImageHistoryCache:
         self.history = self.history[: self.max_history_size]
         self.save()
 
+    def get_recent_image_directory(self) -> str:
+        if not self.history:
+            return ""
+
+        recent_image_path = Path(self.history[0])
+        recent_directory = recent_image_path.parent
+        if not recent_directory.exists():
+            return ""
+
+        return str(recent_directory)
+
     def clear(self) -> None:
         self.history = []
         self.save()

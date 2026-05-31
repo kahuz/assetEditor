@@ -41,6 +41,7 @@ r
 - 이미지 열기: PNG, JPG, JPEG, WEBP, BMP
 - 이미지 저장: PNG, JPG, WEBP 등 Pillow가 지원하는 포맷
 - 최근 이미지 히스토리 cache 저장 및 다음 실행 시 복원
+- 이미지 열기 dialog 시작 폴더를 최근 이미지 폴더 기준으로 설정
 - View 모드: 원본, 그레이스케일
 - OpenCV View: Canny edge preview
 - 체크박스로 활성화하는 View 확대/축소

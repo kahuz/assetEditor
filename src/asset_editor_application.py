@@ -103,6 +103,7 @@ class AssetEditorApplication:
             tag=self.open_dialog_tag,
             width=720,
             height=420,
+            default_path=self.history_cache.get_recent_image_directory(),
         ):
             dpg.add_file_extension(
                 "이미지 파일 (*.png *.jpg *.jpeg *.webp *.bmp)"
@@ -128,7 +129,7 @@ class AssetEditorApplication:
             with dpg.menu(label="파일"):
                 dpg.add_menu_item(
                     label="열기",
-                    callback=lambda: dpg.show_item(self.open_dialog_tag),
+                    callback=self._show_open_dialog,
                 )
                 dpg.add_menu_item(
                     label="다른 이름으로 저장",
@@ -153,7 +154,7 @@ class AssetEditorApplication:
             self.help_widget.add_button(
                 label="이미지 열기",
                 tooltip="편집하거나 확인할 이미지 파일을 불러옵니다.",
-                callback=lambda: dpg.show_item(self.open_dialog_tag),
+                callback=self._show_open_dialog,
             )
             self.help_widget.add_button(
                 label="다른 이름으로 저장",
@@ -323,6 +324,19 @@ class AssetEditorApplication:
             selected_path,
             success_message=f"이미지를 열었습니다: {selected_path}",
             failure_prefix="이미지 열기 실패",
+        )
+
+    def _show_open_dialog(self) -> None:
+        self._sync_open_dialog_default_path()
+        dpg.show_item(self.open_dialog_tag)
+
+    def _sync_open_dialog_default_path(self) -> None:
+        if not dpg.does_item_exist(self.open_dialog_tag):
+            return
+
+        dpg.configure_item(
+            self.open_dialog_tag,
+            default_path=self.history_cache.get_recent_image_directory(),
         )
 
     def _open_image_path(
