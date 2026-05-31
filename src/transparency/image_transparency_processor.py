@@ -50,6 +50,63 @@ class ImageTransparencyProcessor:
             for red, green, blue in unique_colors
         }
 
+    def collect_similar_color_mask(
+        self,
+        image: Image.Image,
+        colors: Iterable[RgbColor],
+        tolerance: float,
+    ) -> np.ndarray:
+        color_list = list(colors)
+        image_rgba_array = np.array(image.convert("RGBA"))
+        image_rgb_array = image_rgba_array[:, :, :3]
+        visible_mask = image_rgba_array[:, :, 3] > 0
+        if not color_list:
+            return np.zeros(image_rgb_array.shape[:2], dtype=bool)
+
+        if tolerance <= 0.0:
+            return (
+                self._collect_exact_color_mask(image_rgb_array, color_list)
+                & visible_mask
+            )
+
+        image_hsv_array = cv2.cvtColor(
+            image_rgb_array,
+            cv2.COLOR_RGB2HSV,
+        ).astype(np.float32)
+        sample_hsv_array = self._convert_colors_to_hsv(color_list)
+        hue_values = sample_hsv_array[:, 0] / 179.0
+        saturation_values = sample_hsv_array[:, 1] / 255.0
+        value_values = sample_hsv_array[:, 2] / 255.0
+
+        hue_center = self._calculate_hue_center(hue_values)
+        hue_spread = float(
+            self._calculate_hue_distance(hue_values, hue_center).max(),
+        )
+        hue_limit = min(0.5, hue_spread + (tolerance * 0.18))
+        saturation_margin = tolerance * 0.45
+        value_margin = tolerance * 0.75
+
+        image_hue = image_hsv_array[:, :, 0] / 179.0
+        image_saturation = image_hsv_array[:, :, 1] / 255.0
+        image_value = image_hsv_array[:, :, 2] / 255.0
+        hue_mask = (
+            self._calculate_hue_distance(image_hue, hue_center)
+            <= hue_limit
+        )
+        saturation_min = float(saturation_values.min()) - saturation_margin
+        saturation_max = float(saturation_values.max()) + saturation_margin
+        saturation_mask = (
+            image_saturation >= max(0.0, saturation_min)
+        ) & (
+            image_saturation <= min(1.0, saturation_max)
+        )
+        value_mask = (
+            image_value >= max(0.0, float(value_values.min()) - value_margin)
+        ) & (
+            image_value <= min(1.0, float(value_values.max()) + value_margin)
+        )
+        return hue_mask & saturation_mask & value_mask & visible_mask
+
     def collect_area_mask(
         self,
         image: Image.Image,
@@ -331,6 +388,45 @@ class ImageTransparencyProcessor:
             | (rgb_values[..., 1] << 8)
             | rgb_values[..., 2]
         )
+
+    def _collect_exact_color_mask(
+        self,
+        rgb_array: np.ndarray,
+        colors: Iterable[RgbColor],
+    ) -> np.ndarray:
+        color_values = self._pack_colors(colors)
+        if color_values.size == 0:
+            return np.zeros(rgb_array.shape[:2], dtype=bool)
+
+        rgb_values = self._pack_rgb_array(rgb_array[:, :, :3])
+        return np.isin(rgb_values, color_values)
+
+    def _convert_colors_to_hsv(
+        self,
+        colors: list[RgbColor],
+    ) -> np.ndarray:
+        color_array = np.asarray(colors, dtype=np.uint8).reshape(-1, 1, 3)
+        return cv2.cvtColor(color_array, cv2.COLOR_RGB2HSV).reshape(-1, 3)
+
+    def _calculate_hue_center(self, hue_values: np.ndarray) -> float:
+        hue_angles = hue_values * 2.0 * np.pi
+        sine_mean = float(np.sin(hue_angles).mean())
+        cosine_mean = float(np.cos(hue_angles).mean())
+        if abs(sine_mean) < 1e-6 and abs(cosine_mean) < 1e-6:
+            return float(hue_values[0])
+
+        center_angle = np.arctan2(sine_mean, cosine_mean)
+        if center_angle < 0:
+            center_angle += 2.0 * np.pi
+        return float(center_angle / (2.0 * np.pi))
+
+    def _calculate_hue_distance(
+        self,
+        hue_values: np.ndarray,
+        hue_center: float,
+    ) -> np.ndarray:
+        hue_diff = np.abs(hue_values - hue_center)
+        return np.minimum(hue_diff, 1.0 - hue_diff)
 
     def _normalize_mask(
         self,

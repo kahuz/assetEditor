@@ -64,6 +64,43 @@ class TransparencyWorkflowTest(unittest.TestCase):
         self.assertEqual(result.getpixel((1, 0))[3], 0)
         self.assertEqual(result.getpixel((2, 2))[3], 0)
 
+    def test_similar_color_mask_matches_magenta_variants(self) -> None:
+        image = Image.new("RGBA", (4, 1), (0, 255, 0, 255))
+        image.putpixel((0, 0), (255, 0, 255, 255))
+        image.putpixel((1, 0), (245, 12, 250, 255))
+        image.putpixel((2, 0), (170, 0, 170, 255))
+
+        exact_mask = self.processor.collect_similar_color_mask(
+            image,
+            {(255, 0, 255)},
+            0.0,
+        )
+        similar_mask = self.processor.collect_similar_color_mask(
+            image,
+            {(255, 0, 255)},
+            0.5,
+        )
+
+        self.assertTrue(exact_mask[0, 0])
+        self.assertFalse(exact_mask[0, 1])
+        self.assertTrue(similar_mask[0, 0])
+        self.assertTrue(similar_mask[0, 1])
+        self.assertTrue(similar_mask[0, 2])
+        self.assertFalse(similar_mask[0, 3])
+
+    def test_similar_color_mask_ignores_transparent_pixels(self) -> None:
+        image = Image.new("RGBA", (2, 1), (255, 0, 255, 255))
+        image.putpixel((1, 0), (255, 0, 255, 0))
+
+        similar_mask = self.processor.collect_similar_color_mask(
+            image,
+            {(255, 0, 255)},
+            0.5,
+        )
+
+        self.assertTrue(similar_mask[0, 0])
+        self.assertFalse(similar_mask[0, 1])
+
     def test_area_selection_keeps_edge_enclosed_foreground(self) -> None:
         image = Image.new("RGBA", (40, 40), (255, 255, 255, 255))
         for y_position in range(12, 28):
@@ -286,6 +323,7 @@ class TransparencyWorkflowTest(unittest.TestCase):
             self.assertTrue(dpg.does_item_exist(app.transparency_mode_combo_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_check_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_mode_combo_tag))
+            self.assertTrue(dpg.does_item_exist(app.color_tolerance_slider_tag))
             self.assertTrue(dpg.does_item_exist(app.preview_pan_check_tag))
             self.assertTrue(
                 dpg.does_item_exist(app.transparency_selection_summary_tag),
@@ -321,6 +359,7 @@ class TransparencyWorkflowTest(unittest.TestCase):
         app.transparency_selection.update_drag((1, 1))
         app._clear_selection_overlay = lambda: None
         app._update_selection_summary = lambda: None
+        app._apply_preview = lambda: None
         app._set_status = lambda _message: None
 
         app._finish_color_selection()
@@ -349,6 +388,23 @@ class TransparencyWorkflowTest(unittest.TestCase):
         app._set_status = lambda _message: None
 
         app._finish_color_selection()
+        app._apply_transparency_selection()
+
+        self.assertEqual(app.document.working_image.getpixel((0, 0))[3], 0)
+        self.assertEqual(app.document.working_image.getpixel((1, 0))[3], 0)
+        self.assertEqual(app.document.working_image.getpixel((2, 0))[3], 255)
+
+    def test_color_tolerance_transparency_applies_similar_colors(self) -> None:
+        app = AssetEditorApplication()
+        app.document.working_image = Image.new("RGBA", (3, 1), (0, 255, 0, 255))
+        app.document.working_image.putpixel((0, 0), (255, 0, 255, 255))
+        app.document.working_image.putpixel((1, 0), (245, 12, 250, 255))
+        app.color_tolerance = 0.5
+        app.transparency_selection.set_mode(TransparencySelectionMode.COLOR)
+        app.transparency_selection.set_color((255, 0, 255))
+        app._apply_preview = lambda: None
+        app._set_status = lambda _message: None
+
         app._apply_transparency_selection()
 
         self.assertEqual(app.document.working_image.getpixel((0, 0))[3], 0)
@@ -451,7 +507,13 @@ class TransparencyWorkflowTest(unittest.TestCase):
             app.transparency_selection.set_mode(TransparencySelectionMode.COLOR)
             app.area_exclude_enabled = True
             app._sync_area_exclude_state()
+            app._sync_color_tolerance_state()
             self.assertFalse(app.area_exclude_enabled)
+            self.assertTrue(
+                dpg.get_item_configuration(
+                    app.color_tolerance_slider_tag,
+                )["enabled"],
+            )
             self.assertFalse(
                 dpg.get_item_configuration(
                     app.area_exclude_check_tag,
@@ -465,7 +527,13 @@ class TransparencyWorkflowTest(unittest.TestCase):
 
             app.transparency_selection.set_mode(TransparencySelectionMode.AREA)
             app.area_exclude_enabled = False
+            app._sync_color_tolerance_state()
             app._sync_area_exclude_state()
+            self.assertFalse(
+                dpg.get_item_configuration(
+                    app.color_tolerance_slider_tag,
+                )["enabled"],
+            )
             self.assertFalse(
                 dpg.get_item_configuration(
                     app.area_exclude_mode_combo_tag,

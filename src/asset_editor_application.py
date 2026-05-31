@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import dearpygui.dearpygui as dpg
+import numpy as np
 
 from common import (
     APP_TITLE,
+    COLOR_TOLERANCE_MAX,
+    COLOR_TOLERANCE_MIN,
     ZOOM_MAX,
     ZOOM_MIN,
     ZOOM_WHEEL_STEP,
@@ -17,6 +20,7 @@ from preview.preview_options import PreviewOptions
 from transparency.image_transparency_processor import ImageTransparencyProcessor
 from transparency.transparency_selection import (
     ImageSelectionRectangle,
+    RgbColor,
     TransparencyExcludeMode,
     TransparencySelection,
     TransparencySelectionMode,
@@ -55,8 +59,10 @@ class AssetEditorApplication:
         self.selection_rectangle_tag = "selection_rectangle"
         self.selection_freeform_tag = "selection_freeform"
         self.zoom_slider_tag = "zoom_slider"
+        self.color_tolerance_slider_tag = "color_tolerance_slider"
         self.preview_pan_check_tag = "preview_pan_check"
         self.zoom_slider_enabled = False
+        self.color_tolerance = 0.0
         self.preview_pan_enabled = False
         self.preview_pan_active = False
         self.preview_pan_last_mouse_position: tuple[float, float] | None = None
@@ -250,6 +256,21 @@ class AssetEditorApplication:
                 callback=self._on_area_exclude_mode_changed,
             )
             with dpg.group(horizontal=True):
+                dpg.add_slider_float(
+                    label="색상 허용치",
+                    tag=self.color_tolerance_slider_tag,
+                    width=250,
+                    default_value=self.color_tolerance,
+                    min_value=COLOR_TOLERANCE_MIN,
+                    max_value=COLOR_TOLERANCE_MAX,
+                    format="%.2f",
+                    callback=self._on_color_tolerance_changed,
+                )
+                self.help_widget.add_icon(
+                    "0이면 정확히 같은 RGB만 선택하고, 값을 올리면 "
+                    "선택 색상과 비슷한 Hue/채도/밝기의 픽셀도 포함합니다.",
+                )
+            with dpg.group(horizontal=True):
                 dpg.add_combo(
                     TransparencyExcludeMode.labels(),
                     tag=self.area_exclude_mode_combo_tag,
@@ -392,7 +413,13 @@ class AssetEditorApplication:
         if self.transparency_selection.mode != TransparencySelectionMode.AREA:
             self.area_exclude_enabled = False
         self._clear_selection_overlay()
+        self._sync_color_tolerance_state()
         self._sync_area_exclude_state()
+        self._update_selection_summary()
+        self._apply_preview()
+
+    def _on_color_tolerance_changed(self, _sender, app_data) -> None:
+        self.color_tolerance = float(app_data)
         self._update_selection_summary()
         self._apply_preview()
 
@@ -451,15 +478,22 @@ class AssetEditorApplication:
             self._set_status("투명 처리할 선택 항목이 없습니다.")
             return
 
+        color_mask = self._collect_selected_color_mask()
+        if color_mask is None or not color_mask.any():
+            self._set_status("투명 처리할 유사 색상 픽셀이 없습니다.")
+            return
+
         self.document.working_image = (
-            self.transparency_processor.apply_transparent_colors(
+            self.transparency_processor.apply_transparent_mask(
                 self.document.working_image,
-                selected_colors,
+                color_mask,
             )
         )
+        transparent_pixels = int(color_mask.sum())
         self._apply_preview()
         self._set_status(
-            f"{len(selected_colors)}개 RGB 컬러를 투명 처리했습니다.",
+            f"{len(selected_colors)}개 RGB 기준 {transparent_pixels}픽셀을 "
+            "투명 처리했습니다.",
         )
 
     def _clear_transparency_selection(self) -> None:
@@ -895,6 +929,7 @@ class AssetEditorApplication:
         self.options.reset()
         self.document.reset_working_image()
         self.transparency_selection.clear()
+        self.color_tolerance = 0.0
         self.preview_pan_enabled = False
         self._stop_preview_pan()
         self.area_exclude_enabled = False
@@ -925,6 +960,7 @@ class AssetEditorApplication:
             self.edge_check_tag: self.options.edge_preview,
             self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
             self.zoom_slider_tag: self.options.zoom,
+            self.color_tolerance_slider_tag: self.color_tolerance,
             self.preview_pan_check_tag: self.preview_pan_enabled,
             self.transparency_mode_combo_tag: self.transparency_selection.mode,
             self.area_exclude_check_tag: self.area_exclude_enabled,
@@ -937,6 +973,7 @@ class AssetEditorApplication:
 
         self._sync_zoom_slider_state()
         self._sync_preview_pan_state()
+        self._sync_color_tolerance_state()
         self._sync_area_exclude_state()
 
     def _sync_zoom_slider_state(self) -> None:
@@ -950,6 +987,20 @@ class AssetEditorApplication:
     def _sync_preview_pan_state(self) -> None:
         if dpg.does_item_exist(self.preview_pan_check_tag):
             dpg.set_value(self.preview_pan_check_tag, self.preview_pan_enabled)
+
+    def _sync_color_tolerance_state(self) -> None:
+        if not dpg.does_item_exist(self.color_tolerance_slider_tag):
+            return
+
+        color_mode = self.transparency_selection.mode in {
+            TransparencySelectionMode.COLOR,
+            TransparencySelectionMode.RECTANGLE,
+        }
+        dpg.configure_item(
+            self.color_tolerance_slider_tag,
+            enabled=color_mode,
+        )
+        dpg.set_value(self.color_tolerance_slider_tag, self.color_tolerance)
 
     def _sync_area_exclude_state(self) -> None:
         area_mode = (
@@ -974,6 +1025,26 @@ class AssetEditorApplication:
                 self.area_exclude_mode,
             )
 
+    def _collect_selection_highlight_mask(self) -> np.ndarray | None:
+        if self.transparency_selection.mode == TransparencySelectionMode.AREA:
+            return self.transparency_selection.area_mask
+
+        return self._collect_selected_color_mask()
+
+    def _collect_selected_color_mask(self) -> np.ndarray | None:
+        if self.document.working_image is None:
+            return None
+
+        selected_colors = self.transparency_selection.selected_colors
+        if not selected_colors:
+            return None
+
+        return self.transparency_processor.collect_similar_color_mask(
+            self.document.working_image,
+            selected_colors,
+            self.color_tolerance,
+        )
+
     def _apply_preview(self, preserve_scroll: bool = True) -> None:
         if self.document.working_image is None:
             return
@@ -982,10 +1053,11 @@ class AssetEditorApplication:
             self.document.working_image,
             self.options,
         )
+        selection_mask = self._collect_selection_highlight_mask()
         self.document.preview_image = (
             self.transparency_processor.apply_selection_highlight(
                 self.document.preview_image,
-                self.transparency_selection.area_mask,
+                selection_mask,
             )
         )
         self._refresh_preview_texture(preserve_scroll)
@@ -1065,6 +1137,7 @@ class AssetEditorApplication:
         self.transparency_selection.set_rectangle(rectangle, colors)
         self._clear_selection_overlay()
         self._update_selection_summary()
+        self._apply_preview()
         if len(colors) == 1:
             color = next(iter(colors))
             self._set_status(
@@ -1086,13 +1159,14 @@ class AssetEditorApplication:
         self.transparency_selection.set_rectangle(rectangle, colors)
         self._clear_selection_overlay()
         self._update_selection_summary()
+        self._apply_preview()
         self._set_status(
             f"사각형 영역에서 {len(colors)}개 RGB 컬러를 선택했습니다.",
         )
 
     def _collect_drag_rectangle_colors(
         self,
-    ) -> tuple[ImageSelectionRectangle, set[tuple[int, int, int]]] | None:
+    ) -> tuple[ImageSelectionRectangle, set[RgbColor]] | None:
         if self.document.working_image is None:
             return None
 
