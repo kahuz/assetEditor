@@ -237,7 +237,8 @@ class AssetEditorApplication:
                     callback=self._on_transparency_mode_changed,
                 )
                 self.help_widget.add_icon(
-                    "컬러, 사각형, 클릭 영역 기준으로 투명 처리 대상을 선택합니다.",
+                    "컬러, 사각형, 클릭 영역 기준으로 투명 처리 대상을 "
+                    "선택합니다. 컬러 선택은 클릭 또는 드래그를 지원합니다.",
                 )
             self.help_widget.add_checkbox(
                 label="영역 제외 모드",
@@ -472,7 +473,11 @@ class AssetEditorApplication:
         self.left_mouse_active = True
         mode = self.transparency_selection.mode
         if mode == TransparencySelectionMode.COLOR:
-            self._select_color_at_point(image_point)
+            if self.transparency_selection.drag_start is not None:
+                return
+
+            self.transparency_selection.start_drag(image_point)
+            self._update_selection_overlay()
         elif mode == TransparencySelectionMode.RECTANGLE:
             if self.transparency_selection.drag_start is not None:
                 return
@@ -491,7 +496,7 @@ class AssetEditorApplication:
         if self._update_area_exclude_drag():
             return
 
-        if self.transparency_selection.mode != TransparencySelectionMode.RECTANGLE:
+        if not self._is_color_drag_selection_mode():
             return
         if self.transparency_selection.drag_start is None:
             return
@@ -511,10 +516,7 @@ class AssetEditorApplication:
             if self._finish_area_exclude_drag():
                 return
 
-            if (
-                self.transparency_selection.mode
-                != TransparencySelectionMode.RECTANGLE
-            ):
+            if not self._is_color_drag_selection_mode():
                 return
             if self.transparency_selection.drag_start is None:
                 return
@@ -523,7 +525,13 @@ class AssetEditorApplication:
             if image_point is not None:
                 self.transparency_selection.update_drag(image_point)
 
-            self._finish_rectangle_selection()
+            if (
+                self.transparency_selection.mode
+                == TransparencySelectionMode.COLOR
+            ):
+                self._finish_color_selection()
+            else:
+                self._finish_rectangle_selection()
         finally:
             self.left_mouse_active = False
 
@@ -590,6 +598,12 @@ class AssetEditorApplication:
                 TransparencyExcludeMode.FREEFORM,
             }
         )
+
+    def _is_color_drag_selection_mode(self) -> bool:
+        return self.transparency_selection.mode in {
+            TransparencySelectionMode.COLOR,
+            TransparencySelectionMode.RECTANGLE,
+        }
 
     def _on_mouse_wheel(self, _sender, app_data) -> None:
         if not self._sync_wheel_scroll_block():
@@ -1028,27 +1042,49 @@ class AssetEditorApplication:
             f"모드: {mode}",
         )
 
-    def _select_color_at_point(self, image_point: tuple[int, int]) -> None:
-        if self.document.working_image is None:
+    def _finish_color_selection(self) -> None:
+        selection_result = self._collect_drag_rectangle_colors()
+        if selection_result is None:
             return
 
-        color = self.document.working_image.convert("RGB").getpixel(
-            image_point,
-        )
-        self.transparency_selection.set_color(color)
+        rectangle, colors = selection_result
+        self.transparency_selection.set_rectangle(rectangle, colors)
         self._clear_selection_overlay()
         self._update_selection_summary()
+        if len(colors) == 1:
+            color = next(iter(colors))
+            self._set_status(
+                f"RGB{color} 컬러를 선택했습니다. "
+                "적용 버튼을 누르면 투명 처리됩니다.",
+            )
+            return
+
         self._set_status(
-            f"RGB{color} 컬러를 선택했습니다. 적용 버튼을 누르면 투명 처리됩니다.",
+            f"컬러 선택 영역에서 {len(colors)}개 RGB 컬러를 선택했습니다.",
         )
 
     def _finish_rectangle_selection(self) -> None:
-        if self.document.working_image is None:
+        selection_result = self._collect_drag_rectangle_colors()
+        if selection_result is None:
             return
+
+        rectangle, colors = selection_result
+        self.transparency_selection.set_rectangle(rectangle, colors)
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._set_status(
+            f"사각형 영역에서 {len(colors)}개 RGB 컬러를 선택했습니다.",
+        )
+
+    def _collect_drag_rectangle_colors(
+        self,
+    ) -> tuple[ImageSelectionRectangle, set[tuple[int, int, int]]] | None:
+        if self.document.working_image is None:
+            return None
 
         rectangle = self.transparency_selection.get_drag_rectangle()
         if rectangle is None:
-            return
+            return None
 
         image_width, image_height = self.document.working_image.size
         rectangle = rectangle.clamp(image_width, image_height)
@@ -1056,12 +1092,7 @@ class AssetEditorApplication:
             self.document.working_image,
             rectangle,
         )
-        self.transparency_selection.set_rectangle(rectangle, colors)
-        self._clear_selection_overlay()
-        self._update_selection_summary()
-        self._set_status(
-            f"사각형 영역에서 {len(colors)}개 RGB 컬러를 선택했습니다.",
-        )
+        return rectangle, colors
 
     def _select_area_at_point(self, image_point: tuple[int, int]) -> None:
         if self.document.working_image is None:
@@ -1240,7 +1271,7 @@ class AssetEditorApplication:
             self._update_area_exclude_overlay()
             return
 
-        if self.transparency_selection.mode != TransparencySelectionMode.RECTANGLE:
+        if not self._is_color_drag_selection_mode():
             return
 
         rectangle = self.transparency_selection.get_drag_rectangle()
@@ -1384,8 +1415,21 @@ class AssetEditorApplication:
         elif not selection.selected_colors:
             message = "선택 없음"
         elif selection.mode == TransparencySelectionMode.COLOR:
-            color = next(iter(selection.selected_colors))
-            message = f"선택 컬러: RGB{color}"
+            if len(selection.selected_colors) == 1:
+                color = next(iter(selection.selected_colors))
+                message = f"선택 컬러: RGB{color}"
+            else:
+                rectangle = selection.rectangle
+                area_text = ""
+                if rectangle is not None:
+                    area_text = (
+                        f"\n영역: {rectangle.left}, {rectangle.top} - "
+                        f"{rectangle.right}, {rectangle.bottom}"
+                    )
+                message = (
+                    f"선택 컬러 수: {len(selection.selected_colors)}"
+                    f"{area_text}"
+                )
         else:
             rectangle = selection.rectangle
             area_text = ""

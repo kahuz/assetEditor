@@ -265,6 +265,51 @@ class TransparencyWorkflowTest(unittest.TestCase):
         self.assertEqual(app.transparency_selection.drag_start, (1, 1))
         self.assertEqual(app.transparency_selection.drag_end, (1, 1))
 
+    def test_color_selection_drag_collects_rectangle_colors(self) -> None:
+        app = AssetEditorApplication()
+        app.document.working_image = Image.new("RGBA", (3, 3), (9, 9, 9, 255))
+        app.document.working_image.putpixel((0, 0), (10, 0, 0, 255))
+        app.document.working_image.putpixel((1, 0), (0, 20, 0, 255))
+        app.document.working_image.putpixel((0, 1), (10, 0, 0, 255))
+        app.transparency_selection.set_mode(TransparencySelectionMode.COLOR)
+        app.transparency_selection.start_drag((0, 0))
+        app.transparency_selection.update_drag((1, 1))
+        app._clear_selection_overlay = lambda: None
+        app._update_selection_summary = lambda: None
+        app._set_status = lambda _message: None
+
+        app._finish_color_selection()
+        selected_colors = app.transparency_selection.selected_colors
+
+        self.assertEqual(
+            selected_colors,
+            {(10, 0, 0), (0, 20, 0), (9, 9, 9)},
+        )
+        self.assertEqual(
+            app.transparency_selection.rectangle,
+            ImageSelectionRectangle(0, 0, 1, 1),
+        )
+
+    def test_color_selection_drag_transparency_applies_all_colors(self) -> None:
+        app = AssetEditorApplication()
+        app.document.working_image = Image.new("RGBA", (3, 1), (9, 9, 9, 255))
+        app.document.working_image.putpixel((0, 0), (10, 0, 0, 255))
+        app.document.working_image.putpixel((1, 0), (0, 20, 0, 255))
+        app.transparency_selection.set_mode(TransparencySelectionMode.COLOR)
+        app.transparency_selection.start_drag((0, 0))
+        app.transparency_selection.update_drag((1, 0))
+        app._clear_selection_overlay = lambda: None
+        app._update_selection_summary = lambda: None
+        app._apply_preview = lambda: None
+        app._set_status = lambda _message: None
+
+        app._finish_color_selection()
+        app._apply_transparency_selection()
+
+        self.assertEqual(app.document.working_image.getpixel((0, 0))[3], 0)
+        self.assertEqual(app.document.working_image.getpixel((1, 0))[3], 0)
+        self.assertEqual(app.document.working_image.getpixel((2, 0))[3], 255)
+
     def test_preview_area_supports_horizontal_scrollbar(self) -> None:
         app = AssetEditorApplication()
         dpg.create_context()
