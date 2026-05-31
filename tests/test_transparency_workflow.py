@@ -107,21 +107,37 @@ class TransparencyWorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.processor.subtract_area_mask(base_mask, exclude_mask)
 
-    def test_circular_mask_supports_local_area_exclusion(self) -> None:
-        image = Image.new("RGBA", (40, 40), (255, 255, 255, 255))
+    def test_detail_area_mask_supports_area_based_exclusion(self) -> None:
+        image = Image.new("RGBA", (40, 20), (255, 255, 255, 255))
+        for y_position in range(0, 20):
+            image.putpixel((19, y_position), (0, 0, 0, 255))
+            image.putpixel((20, y_position), (0, 0, 0, 255))
 
-        selection_mask = self.processor.collect_area_mask(image, (20, 20))
-        exclude_mask = self.processor.collect_circular_mask(
-            image.size,
-            (20, 20),
-            3,
+        selection_mask = np.ones((20, 40), dtype=bool)
+        exclude_mask = self.processor.collect_detail_area_mask(
+            image,
+            selection_mask,
+            (5, 10),
         )
         result = self.processor.subtract_area_mask(selection_mask, exclude_mask)
 
-        self.assertGreater(int(selection_mask.sum()), 1000)
-        self.assertLess(int(exclude_mask.sum()), 40)
-        self.assertFalse(result[20, 20])
-        self.assertTrue(result[0, 0])
+        self.assertTrue(exclude_mask[10, 5])
+        self.assertFalse(exclude_mask[10, 30])
+        self.assertFalse(result[10, 5])
+        self.assertTrue(result[10, 30])
+
+    def test_detail_area_mask_ignores_points_outside_selection(self) -> None:
+        image = Image.new("RGBA", (10, 10), (255, 255, 255, 255))
+        selection_mask = np.zeros((10, 10), dtype=bool)
+        selection_mask[4:7, 4:7] = True
+
+        exclude_mask = self.processor.collect_detail_area_mask(
+            image,
+            selection_mask,
+            (0, 0),
+        )
+
+        self.assertEqual(int(exclude_mask.sum()), 0)
 
     def test_selection_highlight_only_changes_masked_preview_pixels(self) -> None:
         image = Image.new("RGBA", (3, 3), (10, 20, 30, 255))
@@ -194,7 +210,6 @@ class TransparencyWorkflowTest(unittest.TestCase):
 
             self.assertTrue(dpg.does_item_exist(app.transparency_mode_combo_tag))
             self.assertTrue(dpg.does_item_exist(app.area_exclude_check_tag))
-            self.assertTrue(dpg.does_item_exist(app.area_exclude_radius_tag))
             self.assertTrue(
                 dpg.does_item_exist(app.transparency_selection_summary_tag),
             )

@@ -62,6 +62,28 @@ class ImageTransparencyProcessor:
 
         return self._collect_seed_fill_mask(edge_mask, fill_start)
 
+    def collect_detail_area_mask(
+        self,
+        image: Image.Image,
+        selected_mask: np.ndarray,
+        seed_point: ImagePoint,
+    ) -> np.ndarray:
+        normalized_mask = self._normalize_mask(selected_mask, image.size)
+        seed_x, seed_y = self._clamp_point(seed_point, normalized_mask.shape)
+        if not normalized_mask[seed_y, seed_x]:
+            return np.zeros(normalized_mask.shape, dtype=bool)
+
+        detail_edge_mask = self._build_detail_edge_mask(image)
+        fillable_mask = normalized_mask & ~detail_edge_mask
+        fill_start = self._find_fill_start_in_mask(
+            fillable_mask,
+            (seed_x, seed_y),
+        )
+        if fill_start is None:
+            return np.zeros(normalized_mask.shape, dtype=bool)
+
+        return self._collect_mask_fill(fillable_mask, fill_start)
+
     def apply_transparent_mask(
         self,
         image: Image.Image,
@@ -71,24 +93,6 @@ class ImageTransparencyProcessor:
         normalized_mask = self._normalize_mask(area_mask, image.size)
         result_array[:, :, 3][normalized_mask] = 0
         return Image.fromarray(result_array)
-
-    def collect_circular_mask(
-        self,
-        image_size: tuple[int, int],
-        center_point: ImagePoint,
-        radius: int,
-    ) -> np.ndarray:
-        image_width, image_height = image_size
-        center_x = max(0, min(image_width - 1, center_point[0]))
-        center_y = max(0, min(image_height - 1, center_point[1]))
-        normalized_radius = max(1, int(radius))
-
-        y_indices, x_indices = np.ogrid[:image_height, :image_width]
-        distance_squared = (
-            (x_indices - center_x) ** 2
-            + (y_indices - center_y) ** 2
-        )
-        return distance_squared <= normalized_radius**2
 
     def subtract_area_mask(
         self,
@@ -138,6 +142,14 @@ class ImageTransparencyProcessor:
         edge_array = cv2.Canny(gray_array, 80, 160)
         return edge_array > 0
 
+    def _build_detail_edge_mask(self, image: Image.Image) -> np.ndarray:
+        rgb_array = np.array(image.convert("RGB"))
+        gray_array = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
+        edge_array = cv2.Canny(gray_array, 30, 90)
+        edge_mask = edge_array > 0
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        return cv2.dilate(edge_mask.astype(np.uint8), kernel) > 0
+
     def _collect_seed_fill_mask(
         self,
         edge_mask: np.ndarray,
@@ -167,14 +179,42 @@ class ImageTransparencyProcessor:
 
         return visited
 
+    def _collect_mask_fill(
+        self,
+        fillable_mask: np.ndarray,
+        seed_point: ImagePoint,
+    ) -> np.ndarray:
+        height, width = fillable_mask.shape
+        seed_x, seed_y = seed_point
+        visited = np.zeros((height, width), dtype=bool)
+        queue: deque[tuple[int, int]] = deque()
+
+        visited[seed_y, seed_x] = True
+        queue.append((seed_x, seed_y))
+
+        while queue:
+            x_position, y_position = queue.popleft()
+            for next_x, next_y in self._iter_neighbor_points(
+                x_position,
+                y_position,
+                width,
+                height,
+            ):
+                if visited[next_y, next_x] or not fillable_mask[next_y, next_x]:
+                    continue
+
+                visited[next_y, next_x] = True
+                queue.append((next_x, next_y))
+
+        return visited
+
     def _find_fill_start(
         self,
         edge_mask: np.ndarray,
         seed_point: ImagePoint,
     ) -> ImagePoint | None:
         height, width = edge_mask.shape
-        seed_x = max(0, min(width - 1, seed_point[0]))
-        seed_y = max(0, min(height - 1, seed_point[1]))
+        seed_x, seed_y = self._clamp_point(seed_point, edge_mask.shape)
         if not edge_mask[seed_y, seed_x]:
             return seed_x, seed_y
 
@@ -192,6 +232,41 @@ class ImageTransparencyProcessor:
                         return x_position, y_position
 
         return None
+
+    def _find_fill_start_in_mask(
+        self,
+        fillable_mask: np.ndarray,
+        seed_point: ImagePoint,
+    ) -> ImagePoint | None:
+        height, width = fillable_mask.shape
+        seed_x, seed_y = self._clamp_point(seed_point, fillable_mask.shape)
+        if fillable_mask[seed_y, seed_x]:
+            return seed_x, seed_y
+
+        for radius in range(1, 8):
+            for y_position in range(seed_y - radius, seed_y + radius + 1):
+                for x_position in range(seed_x - radius, seed_x + radius + 1):
+                    if (
+                        x_position < 0
+                        or y_position < 0
+                        or x_position >= width
+                        or y_position >= height
+                    ):
+                        continue
+                    if fillable_mask[y_position, x_position]:
+                        return x_position, y_position
+
+        return None
+
+    def _clamp_point(
+        self,
+        point: ImagePoint,
+        mask_shape: tuple[int, int],
+    ) -> ImagePoint:
+        height, width = mask_shape
+        point_x = max(0, min(width - 1, point[0]))
+        point_y = max(0, min(height - 1, point[1]))
+        return point_x, point_y
 
     def _iter_neighbor_points(
         self,

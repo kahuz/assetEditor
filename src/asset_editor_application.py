@@ -5,9 +5,6 @@ import dearpygui.dearpygui as dpg
 
 from common import (
     APP_TITLE,
-    AREA_EXCLUDE_RADIUS_DEFAULT,
-    AREA_EXCLUDE_RADIUS_MAX,
-    AREA_EXCLUDE_RADIUS_MIN,
     ZOOM_MAX,
     ZOOM_MIN,
     ZOOM_WHEEL_STEP,
@@ -51,14 +48,12 @@ class AssetEditorApplication:
         self.edge_check_tag = "edge_check"
         self.transparency_mode_combo_tag = "transparency_mode_combo"
         self.area_exclude_check_tag = "area_exclude_check"
-        self.area_exclude_radius_tag = "area_exclude_radius"
         self.transparency_selection_summary_tag = "transparency_selection_text"
         self.selection_overlay_tag = "selection_overlay"
         self.selection_rectangle_tag = "selection_rectangle"
         self.zoom_slider_tag = "zoom_slider"
         self.zoom_slider_enabled = False
         self.area_exclude_enabled = False
-        self.area_exclude_radius = AREA_EXCLUDE_RADIUS_DEFAULT
         self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
         self.wheel_scroll_blocked = False
 
@@ -233,23 +228,10 @@ class AssetEditorApplication:
                 label="영역 제외 모드",
                 tag=self.area_exclude_check_tag,
                 tooltip=(
-                    "영역 선택 상태에서 켜면 View 클릭 위치 주변의 "
-                    "작은 원형 영역을 현재 선택 영역에서 제외합니다."
+                    "영역 선택 상태에서 켜면 View 클릭 위치의 "
+                    "세부 연결 영역을 현재 선택 영역에서 제외합니다."
                 ),
                 callback=self._on_area_exclude_mode_changed,
-            )
-            with dpg.group(horizontal=True):
-                dpg.add_text("제외 반경")
-                self.help_widget.add_icon(
-                    "영역 제외 모드에서 한 번 클릭할 때 제외할 반경입니다.",
-                )
-            dpg.add_slider_int(
-                tag=self.area_exclude_radius_tag,
-                default_value=self.area_exclude_radius,
-                min_value=AREA_EXCLUDE_RADIUS_MIN,
-                max_value=AREA_EXCLUDE_RADIUS_MAX,
-                width=-1,
-                callback=self._on_area_exclude_radius_changed,
             )
             self.help_widget.add_button(
                 label="투명 처리 적용",
@@ -374,10 +356,6 @@ class AssetEditorApplication:
             return
 
         self.area_exclude_enabled = bool(app_data)
-        self._update_selection_summary()
-
-    def _on_area_exclude_radius_changed(self, _sender, app_data) -> None:
-        self.area_exclude_radius = int(app_data)
         self._update_selection_summary()
 
     def _apply_transparency_selection(self) -> None:
@@ -580,7 +558,6 @@ class AssetEditorApplication:
         self.document.reset_working_image()
         self.transparency_selection.clear()
         self.area_exclude_enabled = False
-        self.area_exclude_radius = AREA_EXCLUDE_RADIUS_DEFAULT
         self._clear_selection_overlay()
         self._sync_controls()
         self._update_selection_summary()
@@ -609,7 +586,6 @@ class AssetEditorApplication:
             self.zoom_slider_tag: self.options.zoom,
             self.transparency_mode_combo_tag: self.transparency_selection.mode,
             self.area_exclude_check_tag: self.area_exclude_enabled,
-            self.area_exclude_radius_tag: self.area_exclude_radius,
         }
 
         for tag, value in control_values.items():
@@ -636,12 +612,6 @@ class AssetEditorApplication:
         )
         dpg.configure_item(self.area_exclude_check_tag, enabled=area_mode)
         dpg.set_value(self.area_exclude_check_tag, self.area_exclude_enabled)
-        if dpg.does_item_exist(self.area_exclude_radius_tag):
-            dpg.configure_item(self.area_exclude_radius_tag, enabled=area_mode)
-            dpg.set_value(
-                self.area_exclude_radius_tag,
-                self.area_exclude_radius,
-            )
 
     def _apply_preview(self) -> None:
         if self.document.working_image is None:
@@ -792,10 +762,10 @@ class AssetEditorApplication:
             self._set_status("먼저 제외 기준이 될 영역을 선택하세요.")
             return
 
-        exclude_mask = self.transparency_processor.collect_circular_mask(
-            self.document.working_image.size,
+        exclude_mask = self.transparency_processor.collect_detail_area_mask(
+            self.document.working_image,
+            current_mask,
             image_point,
-            self.area_exclude_radius,
         )
         overlap_mask = current_mask & exclude_mask
         if not overlap_mask.any():
@@ -938,7 +908,6 @@ class AssetEditorApplication:
                 message = (
                     "영역 선택: View에서 처리할 영역을 클릭하세요."
                     f"\n제외 모드: {exclude_status}"
-                    f"\n제외 반경: {self.area_exclude_radius}px"
                 )
             else:
                 seed_x, seed_y = selection.area_seed_point or (0, 0)
@@ -946,7 +915,6 @@ class AssetEditorApplication:
                     f"선택 영역: {int(selection.area_mask.sum())}픽셀"
                     f"\n기준점: {seed_x}, {seed_y}"
                     f"\n제외 모드: {exclude_status}"
-                    f"\n제외 반경: {self.area_exclude_radius}px"
                 )
         elif not selection.selected_colors:
             message = "선택 없음"
