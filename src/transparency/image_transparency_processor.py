@@ -1,0 +1,221 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Iterable
+
+import cv2
+import numpy as np
+from PIL import Image
+
+from transparency.transparency_selection import (
+    ImagePoint,
+    ImageSelectionRectangle,
+    RgbColor,
+)
+
+
+class ImageTransparencyProcessor:
+    def apply_transparent_colors(
+        self,
+        image: Image.Image,
+        colors: Iterable[RgbColor],
+    ) -> Image.Image:
+        color_values = self._pack_colors(colors)
+        result_array = np.array(image.convert("RGBA"))
+
+        if color_values.size == 0:
+            return Image.fromarray(result_array)
+
+        rgb_values = self._pack_rgb_array(result_array[:, :, :3])
+        transparent_mask = np.isin(rgb_values, color_values)
+        result_array[:, :, 3][transparent_mask] = 0
+        return Image.fromarray(result_array)
+
+    def collect_rectangle_colors(
+        self,
+        image: Image.Image,
+        rectangle: ImageSelectionRectangle,
+    ) -> set[RgbColor]:
+        image_width, image_height = image.size
+        clamped_rectangle = rectangle.clamp(image_width, image_height)
+        rgb_array = np.array(image.convert("RGB"))
+        selected_area = rgb_array[
+            clamped_rectangle.top : clamped_rectangle.bottom + 1,
+            clamped_rectangle.left : clamped_rectangle.right + 1,
+        ]
+        unique_colors = np.unique(selected_area.reshape(-1, 3), axis=0)
+        return {
+            (int(red), int(green), int(blue))
+            for red, green, blue in unique_colors
+        }
+
+    def collect_area_mask(
+        self,
+        image: Image.Image,
+        seed_point: ImagePoint,
+    ) -> np.ndarray:
+        edge_mask = self._build_edge_mask(image)
+        fill_start = self._find_fill_start(edge_mask, seed_point)
+        if fill_start is None:
+            return np.zeros(edge_mask.shape, dtype=bool)
+
+        return self._collect_seed_fill_mask(edge_mask, fill_start)
+
+    def apply_transparent_mask(
+        self,
+        image: Image.Image,
+        area_mask: np.ndarray,
+    ) -> Image.Image:
+        result_array = np.array(image.convert("RGBA"))
+        normalized_mask = self._normalize_mask(area_mask, image.size)
+        result_array[:, :, 3][normalized_mask] = 0
+        return Image.fromarray(result_array)
+
+    def apply_selection_highlight(
+        self,
+        image: Image.Image,
+        area_mask: np.ndarray | None,
+    ) -> Image.Image:
+        if area_mask is None:
+            return image.copy().convert("RGBA")
+
+        normalized_mask = self._normalize_mask(area_mask, image.size)
+        if not normalized_mask.any():
+            return image.copy().convert("RGBA")
+
+        preview_array = np.array(image.convert("RGBA"), dtype=np.float32)
+        highlight_color = np.array([64.0, 176.0, 255.0], dtype=np.float32)
+        preview_array[normalized_mask, :3] = (
+            preview_array[normalized_mask, :3] * 0.6
+            + highlight_color * 0.4
+        )
+        preview_array[normalized_mask, 3] = np.maximum(
+            preview_array[normalized_mask, 3],
+            210.0,
+        )
+
+        boundary_mask = self._build_selection_boundary_mask(normalized_mask)
+        dash_mask = self._build_dash_mask(boundary_mask)
+        preview_array[boundary_mask & dash_mask, :3] = (255, 255, 255)
+        preview_array[boundary_mask & ~dash_mask, :3] = (0, 0, 0)
+        preview_array[boundary_mask, 3] = 255
+        return Image.fromarray(
+            np.clip(preview_array, 0, 255).astype(np.uint8),
+        )
+
+    def _build_edge_mask(self, image: Image.Image) -> np.ndarray:
+        rgb_array = np.array(image.convert("RGB"))
+        gray_array = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
+        edge_array = cv2.Canny(gray_array, 80, 160)
+        return edge_array > 0
+
+    def _collect_seed_fill_mask(
+        self,
+        edge_mask: np.ndarray,
+        seed_point: ImagePoint,
+    ) -> np.ndarray:
+        height, width = edge_mask.shape
+        seed_x, seed_y = seed_point
+        visited = np.zeros((height, width), dtype=bool)
+        queue: deque[tuple[int, int]] = deque()
+
+        visited[seed_y, seed_x] = True
+        queue.append((seed_x, seed_y))
+
+        while queue:
+            x_position, y_position = queue.popleft()
+            for next_x, next_y in self._iter_neighbor_points(
+                x_position,
+                y_position,
+                width,
+                height,
+            ):
+                if visited[next_y, next_x] or edge_mask[next_y, next_x]:
+                    continue
+
+                visited[next_y, next_x] = True
+                queue.append((next_x, next_y))
+
+        return visited
+
+    def _find_fill_start(
+        self,
+        edge_mask: np.ndarray,
+        seed_point: ImagePoint,
+    ) -> ImagePoint | None:
+        height, width = edge_mask.shape
+        seed_x = max(0, min(width - 1, seed_point[0]))
+        seed_y = max(0, min(height - 1, seed_point[1]))
+        if not edge_mask[seed_y, seed_x]:
+            return seed_x, seed_y
+
+        for radius in range(1, 4):
+            for y_position in range(seed_y - radius, seed_y + radius + 1):
+                for x_position in range(seed_x - radius, seed_x + radius + 1):
+                    if (
+                        x_position < 0
+                        or y_position < 0
+                        or x_position >= width
+                        or y_position >= height
+                    ):
+                        continue
+                    if not edge_mask[y_position, x_position]:
+                        return x_position, y_position
+
+        return None
+
+    def _iter_neighbor_points(
+        self,
+        x_position: int,
+        y_position: int,
+        width: int,
+        height: int,
+    ) -> Iterable[tuple[int, int]]:
+        if x_position > 0:
+            yield x_position - 1, y_position
+        if x_position < width - 1:
+            yield x_position + 1, y_position
+        if y_position > 0:
+            yield x_position, y_position - 1
+        if y_position < height - 1:
+            yield x_position, y_position + 1
+
+    def _pack_colors(self, colors: Iterable[RgbColor]) -> np.ndarray:
+        color_list = list(colors)
+        if not color_list:
+            return np.array([], dtype=np.uint32)
+
+        color_array = np.asarray(color_list, dtype=np.uint32)
+        return self._pack_rgb_array(color_array)
+
+    def _pack_rgb_array(self, rgb_array: np.ndarray) -> np.ndarray:
+        rgb_values = rgb_array.astype(np.uint32)
+        return (
+            (rgb_values[..., 0] << 16)
+            | (rgb_values[..., 1] << 8)
+            | rgb_values[..., 2]
+        )
+
+    def _normalize_mask(
+        self,
+        area_mask: np.ndarray,
+        image_size: tuple[int, int],
+    ) -> np.ndarray:
+        image_width, image_height = image_size
+        expected_shape = (image_height, image_width)
+        if area_mask.shape != expected_shape:
+            raise ValueError("선택 영역 크기가 이미지 크기와 다릅니다.")
+
+        return area_mask.astype(bool, copy=False)
+
+    def _build_selection_boundary_mask(self, area_mask: np.ndarray) -> np.ndarray:
+        mask_array = area_mask.astype(np.uint8)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        eroded_array = cv2.erode(mask_array, kernel, iterations=1)
+        return area_mask & ~(eroded_array > 0)
+
+    def _build_dash_mask(self, boundary_mask: np.ndarray) -> np.ndarray:
+        y_indices, x_indices = np.indices(boundary_mask.shape)
+        dash_mask = ((x_indices + y_indices) // 4) % 2 == 0
+        return dash_mask & boundary_mask

@@ -9,6 +9,12 @@ from fonts.korean_font_manager import KoreanFontManager
 from history.image_history_cache import ImageHistoryCache
 from preview.image_preview_processor import ImagePreviewProcessor
 from preview.preview_options import PreviewOptions
+from transparency.image_transparency_processor import ImageTransparencyProcessor
+from transparency.transparency_selection import (
+    ImageSelectionRectangle,
+    TransparencySelection,
+    TransparencySelectionMode,
+)
 from ui.help_widget import HelpWidget
 
 
@@ -17,6 +23,8 @@ class AssetEditorApplication:
         self.document = ImageDocument()
         self.options = PreviewOptions()
         self.processor = ImagePreviewProcessor()
+        self.transparency_processor = ImageTransparencyProcessor()
+        self.transparency_selection = TransparencySelection()
         self.font_manager = KoreanFontManager()
         self.history_cache = ImageHistoryCache()
         self.help_widget = HelpWidget()
@@ -33,6 +41,10 @@ class AssetEditorApplication:
         self.history_combo_tag = "history_combo"
         self.grayscale_check_tag = "grayscale_check"
         self.edge_check_tag = "edge_check"
+        self.transparency_mode_combo_tag = "transparency_mode_combo"
+        self.transparency_selection_summary_tag = "transparency_selection_text"
+        self.selection_overlay_tag = "selection_overlay"
+        self.selection_rectangle_tag = "selection_rectangle"
         self.zoom_slider_tag = "zoom_slider"
         self.zoom_slider_enabled = False
         self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
@@ -61,6 +73,7 @@ class AssetEditorApplication:
             dpg.add_text("준비됨", tag=self.status_tag)
 
         dpg.create_viewport(title=APP_TITLE, width=1280, height=820)
+        dpg.add_viewport_drawlist(tag=self.selection_overlay_tag, front=True)
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.set_primary_window(self.primary_window_tag, True)
@@ -128,12 +141,12 @@ class AssetEditorApplication:
             )
             self.help_widget.add_button(
                 label="다른 이름으로 저장",
-                tooltip="현재 View 결과를 새 이미지 파일로 저장합니다.",
+                tooltip="현재 투명 처리 결과를 새 이미지 파일로 저장합니다.",
                 callback=lambda: dpg.show_item(self.save_dialog_tag),
             )
             self.help_widget.add_button(
                 label="초기화",
-                tooltip="View 옵션을 기본값으로 되돌립니다.",
+                tooltip="View 옵션과 투명 처리 결과를 원본 상태로 되돌립니다.",
                 callback=self._reset_preview,
             )
 
@@ -192,6 +205,35 @@ class AssetEditorApplication:
             )
 
             dpg.add_spacer(height=10)
+            dpg.add_text("배경 투명 처리")
+            with dpg.group(horizontal=True):
+                dpg.add_combo(
+                    TransparencySelectionMode.labels(),
+                    tag=self.transparency_mode_combo_tag,
+                    width=250,
+                    default_value=self.transparency_selection.mode,
+                    callback=self._on_transparency_mode_changed,
+                )
+                self.help_widget.add_icon(
+                    "컬러, 사각형, 클릭 영역 기준으로 투명 처리 대상을 선택합니다.",
+                )
+            self.help_widget.add_button(
+                label="투명 처리 적용",
+                tooltip="현재 선택한 컬러 또는 영역 기준으로 alpha를 0으로 만듭니다.",
+                callback=self._apply_transparency_selection,
+            )
+            self.help_widget.add_button(
+                label="선택 해제",
+                tooltip="투명 처리 선택 상태를 비웁니다.",
+                callback=self._clear_transparency_selection,
+            )
+            dpg.add_text(
+                "선택 없음",
+                tag=self.transparency_selection_summary_tag,
+                wrap=270,
+            )
+
+            dpg.add_spacer(height=10)
             dpg.add_text("이미지 정보")
             dpg.add_text("로드된 이미지 없음", tag=self.metadata_tag, wrap=270)
 
@@ -214,6 +256,19 @@ class AssetEditorApplication:
         with dpg.handler_registry():
             dpg.add_mouse_move_handler(callback=self._on_mouse_move)
             dpg.add_mouse_wheel_handler(callback=self._on_mouse_wheel)
+            dpg.add_mouse_down_handler(
+                button=dpg.mvMouseButton_Left,
+                callback=self._on_mouse_down,
+            )
+            dpg.add_mouse_drag_handler(
+                button=dpg.mvMouseButton_Left,
+                threshold=0.0,
+                callback=self._on_mouse_drag,
+            )
+            dpg.add_mouse_release_handler(
+                button=dpg.mvMouseButton_Left,
+                callback=self._on_mouse_release,
+            )
 
     def _on_file_open(self, _sender, app_data) -> None:
         selections = app_data.get("selections", {})
@@ -269,6 +324,104 @@ class AssetEditorApplication:
         self.options.zoom = float(app_data)
         self._refresh_preview_texture()
 
+    def _on_transparency_mode_changed(self, _sender, app_data) -> None:
+        self.transparency_selection.set_mode(str(app_data))
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._apply_preview()
+
+    def _apply_transparency_selection(self) -> None:
+        if self.document.working_image is None:
+            self._set_status("투명 처리할 이미지가 없습니다.")
+            return
+
+        mode = self.transparency_selection.mode
+        if mode == TransparencySelectionMode.AREA:
+            area_mask = self.transparency_selection.area_mask
+            if area_mask is None or not area_mask.any():
+                self._set_status("투명 처리할 선택 영역이 없습니다.")
+                return
+
+            self.document.working_image = (
+                self.transparency_processor.apply_transparent_mask(
+                    self.document.working_image,
+                    area_mask,
+                )
+            )
+            transparent_pixels = int(area_mask.sum())
+            self.transparency_selection.clear()
+            self._apply_preview()
+            self._update_selection_summary()
+            self._set_status(
+                f"선택 영역 {transparent_pixels}픽셀을 투명 처리했습니다.",
+            )
+            return
+
+        selected_colors = self.transparency_selection.selected_colors
+        if not selected_colors:
+            self._set_status("투명 처리할 선택 항목이 없습니다.")
+            return
+
+        self.document.working_image = (
+            self.transparency_processor.apply_transparent_colors(
+                self.document.working_image,
+                selected_colors,
+            )
+        )
+        self._apply_preview()
+        self._set_status(
+            f"{len(selected_colors)}개 RGB 컬러를 투명 처리했습니다.",
+        )
+
+    def _clear_transparency_selection(self) -> None:
+        self.transparency_selection.clear()
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._apply_preview()
+        self._set_status("투명 처리 선택을 해제했습니다.")
+
+    def _on_mouse_down(self, _sender, _app_data) -> None:
+        if not self._is_preview_click_active():
+            return
+
+        image_point = self._get_mouse_image_point()
+        if image_point is None:
+            return
+
+        mode = self.transparency_selection.mode
+        if mode == TransparencySelectionMode.COLOR:
+            self._select_color_at_point(image_point)
+        elif mode == TransparencySelectionMode.RECTANGLE:
+            self.transparency_selection.start_drag(image_point)
+            self._update_selection_overlay()
+        elif mode == TransparencySelectionMode.AREA:
+            self._select_area_at_point(image_point)
+
+    def _on_mouse_drag(self, _sender, _app_data) -> None:
+        if self.transparency_selection.mode != TransparencySelectionMode.RECTANGLE:
+            return
+        if self.transparency_selection.drag_start is None:
+            return
+
+        image_point = self._get_mouse_image_point(clamp=True)
+        if image_point is None:
+            return
+
+        self.transparency_selection.update_drag(image_point)
+        self._update_selection_overlay()
+
+    def _on_mouse_release(self, _sender, _app_data) -> None:
+        if self.transparency_selection.mode != TransparencySelectionMode.RECTANGLE:
+            return
+        if self.transparency_selection.drag_start is None:
+            return
+
+        image_point = self._get_mouse_image_point(clamp=True)
+        if image_point is not None:
+            self.transparency_selection.update_drag(image_point)
+
+        self._finish_rectangle_selection()
+
     def _on_mouse_wheel(self, _sender, app_data) -> None:
         if not self._sync_wheel_scroll_block():
             return
@@ -302,6 +455,13 @@ class AssetEditorApplication:
         for tag in (self.primary_window_tag, self.preview_area_tag):
             if dpg.does_item_exist(tag):
                 dpg.configure_item(tag, no_scroll_with_mouse=blocked)
+
+    def _is_preview_click_active(self) -> bool:
+        if self.document.preview_image is None:
+            return False
+        if not dpg.does_item_exist(self.preview_image_tag):
+            return False
+        return bool(dpg.is_item_hovered(self.preview_image_tag))
 
     def _change_zoom_by_wheel_delta(self, wheel_delta: float) -> None:
         next_zoom = self.options.zoom + (wheel_delta * ZOOM_WHEEL_STEP)
@@ -363,7 +523,11 @@ class AssetEditorApplication:
 
     def _reset_options_and_refresh(self) -> None:
         self.options.reset()
+        self.document.reset_working_image()
+        self.transparency_selection.clear()
+        self._clear_selection_overlay()
         self._sync_controls()
+        self._update_selection_summary()
         self._apply_preview()
 
     def _refresh_history_items(self) -> None:
@@ -387,6 +551,7 @@ class AssetEditorApplication:
             self.edge_check_tag: self.options.edge_preview,
             self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
             self.zoom_slider_tag: self.options.zoom,
+            self.transparency_mode_combo_tag: self.transparency_selection.mode,
         }
 
         for tag, value in control_values.items():
@@ -404,12 +569,18 @@ class AssetEditorApplication:
         self._sync_wheel_scroll_block()
 
     def _apply_preview(self) -> None:
-        if self.document.original_image is None:
+        if self.document.working_image is None:
             return
 
         self.document.preview_image = self.processor.apply(
-            self.document.original_image,
+            self.document.working_image,
             self.options,
+        )
+        self.document.preview_image = (
+            self.transparency_processor.apply_selection_highlight(
+                self.document.preview_image,
+                self.transparency_selection.area_mask,
+            )
         )
         self._refresh_preview_texture()
 
@@ -439,6 +610,7 @@ class AssetEditorApplication:
             parent=self.canvas_group_tag,
             tag=self.preview_image_tag,
         )
+        self._update_selection_overlay()
         self._update_metadata()
 
     def _clear_preview_items(self) -> None:
@@ -462,6 +634,7 @@ class AssetEditorApplication:
         )
         original_width, original_height = self.document.original_image.size
         preview_width, preview_height = self.document.preview_image.size
+        transparent_pixels = self._count_transparent_pixels()
         mode = "엣지 View" if self.options.edge_preview else "일반 View"
 
         dpg.set_value(
@@ -469,8 +642,208 @@ class AssetEditorApplication:
             f"{source_name}\n"
             f"원본: {original_width} x {original_height}\n"
             f"View: {preview_width} x {preview_height}\n"
+            f"투명 픽셀: {transparent_pixels}\n"
             f"모드: {mode}",
         )
+
+    def _select_color_at_point(self, image_point: tuple[int, int]) -> None:
+        if self.document.working_image is None:
+            return
+
+        color = self.document.working_image.convert("RGB").getpixel(
+            image_point,
+        )
+        self.transparency_selection.set_color(color)
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._set_status(
+            f"RGB{color} 컬러를 선택했습니다. 적용 버튼을 누르면 투명 처리됩니다.",
+        )
+
+    def _finish_rectangle_selection(self) -> None:
+        if self.document.working_image is None:
+            return
+
+        rectangle = self.transparency_selection.get_drag_rectangle()
+        if rectangle is None:
+            return
+
+        image_width, image_height = self.document.working_image.size
+        rectangle = rectangle.clamp(image_width, image_height)
+        colors = self.transparency_processor.collect_rectangle_colors(
+            self.document.working_image,
+            rectangle,
+        )
+        self.transparency_selection.set_rectangle(rectangle, colors)
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._set_status(
+            f"사각형 영역에서 {len(colors)}개 RGB 컬러를 선택했습니다.",
+        )
+
+    def _select_area_at_point(self, image_point: tuple[int, int]) -> None:
+        if self.document.working_image is None:
+            return
+
+        area_mask = self.transparency_processor.collect_area_mask(
+            self.document.working_image,
+            image_point,
+        )
+        if not area_mask.any():
+            self.transparency_selection.clear()
+            self._apply_preview()
+            self._update_selection_summary()
+            self._set_status("선택할 수 있는 영역을 찾지 못했습니다.")
+            return
+
+        self.transparency_selection.set_area_mask(image_point, area_mask)
+        self._clear_selection_overlay()
+        self._update_selection_summary()
+        self._apply_preview()
+        self._set_status(
+            f"영역 {int(area_mask.sum())}픽셀을 선택했습니다.",
+        )
+
+    def _get_mouse_image_point(
+        self,
+        clamp: bool = False,
+    ) -> tuple[int, int] | None:
+        mouse_x, mouse_y = dpg.get_mouse_pos(local=False)
+        return self._display_point_to_image_point(mouse_x, mouse_y, clamp)
+
+    def _display_point_to_image_point(
+        self,
+        display_x: float,
+        display_y: float,
+        clamp: bool = False,
+    ) -> tuple[int, int] | None:
+        if self.document.working_image is None:
+            return None
+
+        preview_rect = self._get_preview_display_rect()
+        if preview_rect is None:
+            return None
+
+        left, top, width, height = preview_rect
+        if width <= 0 or height <= 0:
+            return None
+
+        relative_x = display_x - left
+        relative_y = display_y - top
+
+        if clamp:
+            relative_x = max(0.0, min(width - 1, relative_x))
+            relative_y = max(0.0, min(height - 1, relative_y))
+        elif (
+            relative_x < 0
+            or relative_y < 0
+            or relative_x >= width
+            or relative_y >= height
+        ):
+            return None
+
+        image_width, image_height = self.document.working_image.size
+        image_x = int(relative_x * image_width / width)
+        image_y = int(relative_y * image_height / height)
+        image_x = max(0, min(image_width - 1, image_x))
+        image_y = max(0, min(image_height - 1, image_y))
+        return image_x, image_y
+
+    def _get_preview_display_rect(self) -> tuple[float, float, float, float] | None:
+        if not dpg.does_item_exist(self.preview_image_tag):
+            return None
+
+        left, top = dpg.get_item_rect_min(self.preview_image_tag)
+        width, height = dpg.get_item_rect_size(self.preview_image_tag)
+        return float(left), float(top), float(width), float(height)
+
+    def _update_selection_overlay(self) -> None:
+        self._clear_selection_overlay()
+        if self.transparency_selection.mode != TransparencySelectionMode.RECTANGLE:
+            return
+        if not dpg.does_item_exist(self.selection_overlay_tag):
+            return
+
+        rectangle = self.transparency_selection.get_drag_rectangle()
+        if rectangle is None:
+            return
+
+        display_bounds = self._image_rectangle_to_display_bounds(rectangle)
+        if display_bounds is None:
+            return
+
+        left, top, right, bottom = display_bounds
+        dpg.draw_rectangle(
+            (left, top),
+            (right, bottom),
+            parent=self.selection_overlay_tag,
+            tag=self.selection_rectangle_tag,
+            color=(80, 180, 255, 255),
+            fill=(80, 180, 255, 45),
+            thickness=2.0,
+        )
+
+    def _clear_selection_overlay(self) -> None:
+        if dpg.does_item_exist(self.selection_rectangle_tag):
+            dpg.delete_item(self.selection_rectangle_tag)
+
+    def _image_rectangle_to_display_bounds(
+        self,
+        rectangle: ImageSelectionRectangle,
+    ) -> tuple[float, float, float, float] | None:
+        if self.document.working_image is None:
+            return None
+
+        preview_rect = self._get_preview_display_rect()
+        if preview_rect is None:
+            return None
+
+        left, top, width, height = preview_rect
+        image_width, image_height = self.document.working_image.size
+        return (
+            left + (rectangle.left * width / image_width),
+            top + (rectangle.top * height / image_height),
+            left + ((rectangle.right + 1) * width / image_width),
+            top + ((rectangle.bottom + 1) * height / image_height),
+        )
+
+    def _update_selection_summary(self) -> None:
+        if not dpg.does_item_exist(self.transparency_selection_summary_tag):
+            return
+
+        selection = self.transparency_selection
+        if selection.mode == TransparencySelectionMode.AREA:
+            if selection.area_mask is None:
+                message = "영역 선택: View에서 처리할 영역을 클릭하세요."
+            else:
+                seed_x, seed_y = selection.area_seed_point or (0, 0)
+                message = (
+                    f"선택 영역: {int(selection.area_mask.sum())}픽셀"
+                    f"\n기준점: {seed_x}, {seed_y}"
+                )
+        elif not selection.selected_colors:
+            message = "선택 없음"
+        elif selection.mode == TransparencySelectionMode.COLOR:
+            color = next(iter(selection.selected_colors))
+            message = f"선택 컬러: RGB{color}"
+        else:
+            rectangle = selection.rectangle
+            area_text = ""
+            if rectangle is not None:
+                area_text = (
+                    f"\n영역: {rectangle.left}, {rectangle.top} - "
+                    f"{rectangle.right}, {rectangle.bottom}"
+                )
+            message = f"선택 컬러 수: {len(selection.selected_colors)}{area_text}"
+
+        dpg.set_value(self.transparency_selection_summary_tag, message)
+
+    def _count_transparent_pixels(self) -> int:
+        if self.document.working_image is None:
+            return 0
+
+        alpha_values = self.document.working_image.getchannel("A")
+        return int(alpha_values.histogram()[0])
 
     def _set_status(self, message: str) -> None:
         dpg.set_value(self.status_tag, message)
