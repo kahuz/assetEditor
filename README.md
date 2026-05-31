@@ -16,6 +16,11 @@ Dear PyGui + Pillow/OpenCV 기반의 간단한 이미지 프리뷰 도구입니�
 | | [ 다른 이름으로 저장 ] ?   | |              image preview                    | |
 | | [ 초기화 ] ?               | |                                               | |
 | |                            | |                                               | |
+| | 최근 이미지                | |                                               | |
+| | [ path/to/image.png v ] ?   | |                                               | |
+| | [ 히스토리 열기 ] ?        | |                                               | |
+| | [ 히스토리 비우기 ] ?      | |                                               | |
+| |                            | |                                               | |
 | | 프리뷰                     | |                                               | |
 | | [ ] 그레이스케일 ?         | |                                               | |
 | | [ ] 엣지 프리뷰 ?          | |                                               | |
@@ -35,6 +40,7 @@ Dear PyGui + Pillow/OpenCV 기반의 간단한 이미지 프리뷰 도구입니�
 
 - 이미지 열기: PNG, JPG, JPEG, WEBP, BMP
 - 이미지 저장: PNG, JPG, WEBP 등 Pillow가 지원하는 포맷
+- 최근 이미지 히스토리 cache 저장 및 다음 실행 시 복원
 - 프리뷰 모드: 원본, 그레이스케일
 - OpenCV 프리뷰: Canny edge preview
 - 프리뷰 확대/축소
@@ -59,6 +65,7 @@ python asset_editor_application.py
 |-- .vscode/
 |   |-- launch.json            # venv 기반 실행 설정
 |   `-- settings.json          # VS Code UTF-8/인터프리터 설정
+|-- .cache/                    # 실행 중 생성되는 히스토리 cache
 |-- asset_editor_application.py # Dear PyGui 앱 진입점
 |-- requirements.txt  # 런타임 의존성
 |-- README.md         # 설계와 실행 방법

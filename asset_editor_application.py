@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,8 @@ APP_TITLE = "assetEditor"
 DEFAULT_CANVAS_WIDTH = 960
 DEFAULT_CANVAS_HEIGHT = 640
 DEFAULT_FONT_SIZE = 18
+CACHE_FILE_PATH = Path(".cache/asset_editor_history.json")
+MAX_HISTORY_SIZE = 20
 KOREAN_FONT_PATHS = (
     Path("C:/Windows/Fonts/malgun.ttf"),
     Path("C:/Windows/Fonts/NotoSansKR-Regular.otf"),
@@ -118,18 +121,71 @@ class KoreanFontManager:
         return None
 
 
+class ImageHistoryCache:
+    def __init__(
+        self,
+        cache_path: Path = CACHE_FILE_PATH,
+        max_history_size: int = MAX_HISTORY_SIZE,
+    ) -> None:
+        self.cache_path = cache_path
+        self.max_history_size = max_history_size
+        self.history = self.load()
+
+    def load(self) -> list[str]:
+        if not self.cache_path.exists():
+            return []
+
+        try:
+            cache_data = json.loads(
+                self.cache_path.read_text(encoding="utf-8"),
+            )
+        except (OSError, json.JSONDecodeError):
+            return []
+
+        paths = cache_data.get("paths", [])
+        if not isinstance(paths, list):
+            return []
+
+        return [path for path in paths if isinstance(path, str)]
+
+    def add(self, path: str) -> None:
+        history_path = str(Path(path).resolve())
+        self.history = [
+            saved_path
+            for saved_path in self.history
+            if saved_path.lower() != history_path.lower()
+        ]
+        self.history.insert(0, history_path)
+        self.history = self.history[: self.max_history_size]
+        self.save()
+
+    def clear(self) -> None:
+        self.history = []
+        self.save()
+
+    def save(self) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_data = {"paths": self.history}
+        self.cache_path.write_text(
+            json.dumps(cache_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
 class AssetEditorApplication:
     def __init__(self) -> None:
         self.document = ImageDocument()
         self.options = PreviewOptions()
         self.processor = ImagePreviewProcessor()
         self.font_manager = KoreanFontManager()
+        self.history_cache = ImageHistoryCache()
         self.texture_tag = "preview_texture"
         self.preview_image_tag = "preview_image"
         self.empty_preview_tag = "empty_preview_text"
         self.status_tag = "status_text"
         self.metadata_tag = "metadata_text"
         self.canvas_group_tag = "canvas_group"
+        self.history_combo_tag = "history_combo"
 
     def run(self) -> None:
         self._build_ui()
@@ -195,6 +251,15 @@ class AssetEditorApplication:
                 )
             with dpg.menu(label="편집"):
                 dpg.add_menu_item(label="초기화", callback=self._reset_preview)
+            with dpg.menu(label="히스토리"):
+                dpg.add_menu_item(
+                    label="선택한 히스토리 열기",
+                    callback=self._open_selected_history,
+                )
+                dpg.add_menu_item(
+                    label="히스토리 비우기",
+                    callback=self._clear_history,
+                )
 
     def _build_controls(self) -> None:
         with dpg.child_window(width=300, autosize_y=True, border=True):
@@ -214,6 +279,27 @@ class AssetEditorApplication:
                 label="초기화",
                 tooltip="프리뷰 옵션을 기본값으로 되돌립니다.",
                 callback=self._reset_preview,
+            )
+
+            dpg.add_spacer(height=10)
+            dpg.add_text("최근 이미지")
+            self._add_combo_with_help(
+                tag=self.history_combo_tag,
+                tooltip=(
+                    "이전에 열었던 이미지 경로입니다. "
+                    "cache 파일에서 앱 시작 시 자동으로 불러옵니다."
+                ),
+                items=self.history_cache.history,
+            )
+            self._add_button_with_help(
+                label="히스토리 열기",
+                tooltip="최근 이미지 목록에서 선택한 파일을 다시 엽니다.",
+                callback=self._open_selected_history,
+            )
+            self._add_button_with_help(
+                label="히스토리 비우기",
+                tooltip="저장된 최근 이미지 cache를 비웁니다.",
+                callback=self._clear_history,
             )
 
             dpg.add_spacer(height=10)
@@ -263,6 +349,16 @@ class AssetEditorApplication:
             dpg.add_checkbox(label=label, tag=tag, callback=callback)
             self._add_help_icon(tooltip)
 
+    def _add_combo_with_help(
+        self,
+        tag: str,
+        tooltip: str,
+        items: list[str],
+    ) -> None:
+        with dpg.group(horizontal=True):
+            dpg.add_combo(items, tag=tag, width=250)
+            self._add_help_icon(tooltip)
+
     def _add_slider_with_help(
         self,
         label: str,
@@ -308,6 +404,8 @@ class AssetEditorApplication:
         selected_path = next(iter(selections.values()))
         try:
             self.document.load(selected_path)
+            self.history_cache.add(selected_path)
+            self._refresh_history_items()
             self.options.reset()
             self._sync_controls()
             self._apply_preview()
@@ -338,10 +436,47 @@ class AssetEditorApplication:
         self.options.zoom = float(app_data)
         self._refresh_preview_texture()
 
+    def _open_selected_history(self) -> None:
+        selected_path = dpg.get_value(self.history_combo_tag)
+        if not selected_path:
+            self._set_status("선택된 히스토리가 없습니다.")
+            return
+
+        try:
+            self.document.load(selected_path)
+            self.history_cache.add(selected_path)
+            self._refresh_history_items()
+            self.options.reset()
+            self._sync_controls()
+            self._apply_preview()
+            self._set_status(f"히스토리에서 이미지를 열었습니다: {selected_path}")
+        except Exception as exc:
+            self._set_status(f"히스토리 이미지 열기 실패: {exc}")
+
+    def _clear_history(self) -> None:
+        self.history_cache.clear()
+        self._refresh_history_items()
+        self._set_status("이미지 히스토리를 비웠습니다.")
+
     def _reset_preview(self) -> None:
         self.options.reset()
         self._sync_controls()
         self._apply_preview()
+
+    def _refresh_history_items(self) -> None:
+        if not dpg.does_item_exist(self.history_combo_tag):
+            return
+
+        dpg.configure_item(
+            self.history_combo_tag,
+            items=self.history_cache.history,
+        )
+        selected_value = (
+            self.history_cache.history[0]
+            if self.history_cache.history
+            else ""
+        )
+        dpg.set_value(self.history_combo_tag, selected_value)
 
     def _sync_controls(self) -> None:
         control_values = {
