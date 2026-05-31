@@ -27,6 +27,8 @@ class AssetEditorApplication:
         self.metadata_tag = "metadata_text"
         self.canvas_group_tag = "canvas_group"
         self.history_combo_tag = "history_combo"
+        self.zoom_slider_enabled = False
+        self.zoom_slider_enabled_tag = "zoom_slider_enabled_check"
 
     def run(self) -> None:
         self._build_ui()
@@ -160,14 +162,19 @@ class AssetEditorApplication:
                 ),
                 callback=self._on_edge_preview_changed,
             )
-            self.help_widget.add_slider(
+            self.help_widget.add_lockable_slider(
                 label="확대",
-                tag="zoom_slider",
-                tooltip="프리뷰 표시 크기를 확대하거나 축소합니다.",
+                check_tag=self.zoom_slider_enabled_tag,
+                slider_tag="zoom_slider",
+                tooltip=(
+                    "체크하면 확대 배율을 조정할 수 있습니다. "
+                    "체크를 해제해도 현재 확대 값은 유지됩니다."
+                ),
                 default_value=1.0,
                 min_value=0.25,
                 max_value=3.0,
-                callback=self._on_zoom_changed,
+                check_callback=self._on_zoom_slider_enabled_changed,
+                slider_callback=self._on_zoom_changed,
             )
 
             dpg.add_spacer(height=10)
@@ -220,6 +227,10 @@ class AssetEditorApplication:
         self.options.edge_preview = bool(app_data)
         self._apply_preview()
 
+    def _on_zoom_slider_enabled_changed(self, _sender, app_data) -> None:
+        self.zoom_slider_enabled = bool(app_data)
+        self._sync_zoom_slider_state()
+
     def _on_zoom_changed(self, _sender, app_data) -> None:
         self.options.zoom = float(app_data)
         self._refresh_preview_texture()
@@ -270,12 +281,22 @@ class AssetEditorApplication:
         control_values = {
             "grayscale_check": self.options.grayscale,
             "edge_check": self.options.edge_preview,
+            self.zoom_slider_enabled_tag: self.zoom_slider_enabled,
             "zoom_slider": self.options.zoom,
         }
 
         for tag, value in control_values.items():
             if dpg.does_item_exist(tag):
                 dpg.set_value(tag, value)
+
+        self._sync_zoom_slider_state()
+
+    def _sync_zoom_slider_state(self) -> None:
+        if dpg.does_item_exist("zoom_slider"):
+            dpg.configure_item(
+                "zoom_slider",
+                enabled=self.zoom_slider_enabled,
+            )
 
     def _apply_preview(self) -> None:
         if self.document.original_image is None:
